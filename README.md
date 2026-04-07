@@ -233,4 +233,4 @@ Optional:
 
 ## License
 
-This code is shared for research collaboration purposes. Contact the PI before any external use.
+MIT License. See [LICENSE](LICENSE) for details.
