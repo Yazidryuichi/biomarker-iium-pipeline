@@ -40,6 +40,7 @@ from stages.stage1_cleaning import run_stage1
 from stages.stage2_features import run_stage2
 from stages.stage3_merge import run_stage3
 from stages.stage4_analysis import run_stage4
+from stages.exploratory_quantum import run_quantum_exploration
 
 
 def main():
@@ -48,7 +49,7 @@ def main():
     )
     parser.add_argument(
         "--stage", type=int, default=None,
-        help="Run specific stage (1-4). Default: run all."
+        help="Run specific stage (1-5). 5=quantum exploration. Default: run all."
     )
     parser.add_argument(
         "--include-emotional", action="store_true",
@@ -127,6 +128,17 @@ def main():
             )
 
         results = run_stage4(config, full_df)
+
+    # ── Stage 5: Quantum-Inspired Exploration ──
+    if args.stage is None or args.stage == 5:
+        if args.stage == 5:
+            all_epochs = load_cleaned_epochs(config)
+            import pandas as pd
+            full_df = pd.read_csv(
+                os.path.join(config["paths"]["output_dir"], "full_dataset.csv")
+            )
+
+        quantum_df = run_quantum_exploration(config, all_epochs, full_df)
 
     elapsed = time.time() - start_time
     print(f"\n{'=' * 60}")
