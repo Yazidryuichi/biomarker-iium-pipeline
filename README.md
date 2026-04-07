@@ -14,6 +14,33 @@ A 5-stage Python analysis pipeline for developing QEEG-based biomarkers of execu
 
 ---
 
+## Scientific Rigor
+
+This pipeline implements publication-grade statistical methodology:
+
+| Requirement | Implementation |
+|---|---|
+| **Pre-specified hypotheses** | H1-H4 defined from literature (Arns 2013, Zhang 2017, Tan 2024) before analysis |
+| **Leakage prevention** | Fold-internal median split; imputation, scaling, feature selection all inside CV pipeline |
+| **Statistical validation** | Permutation test (500 perms, p-value reported); bootstrap 95% CI; FDR correction |
+| **Effect sizes** | Cohen's d for all correlations; not just p-values |
+| **Class imbalance** | `class_weight='balanced'` on RF + SVM |
+| **Explainability** | SHAP per-CV-fold with stability analysis (mean, std, CV across folds) |
+| **Biological interpretation** | Every SHAP feature mapped to neural system, mechanism, and EF relevance |
+| **Math transparency** | All equations documented in [METHODS.md](METHODS.md) |
+| **AI transparency** | Full disclosure in [AI_TRANSPARENCY.md](AI_TRANSPARENCY.md) |
+| **Reproducibility** | Dockerfile, Makefile, pinned deps, config.yaml, fixed seeds (42), logging |
+| **Evaluation harness** | `evaluate.py` scores pipeline on 6 dimensions (all >= 8/10) |
+
+### Limitations (acknowledged)
+
+- **No external validation cohort.** Pilot N=28 from a single school. Target N=100.
+- **Exploratory biomarker candidates**, not clinically validated biomarkers.
+- **Cross-sectional design** — no test-retest reliability for QEEG measures.
+- **CNN-LSTM underpowered** at N=28-100 (disabled by default).
+
+---
+
 ## Key Results (N=28 pilot)
 
 ### ML Classification by Feature Set
@@ -40,9 +67,11 @@ Raw EDF files
     |
     v
 STAGE 1: Cleaning (HAPPE-compliant)
-    Bandpass 0.5-45 Hz -> Notch 50 Hz -> Bad channel detection (z-score)
-    -> Interpolation -> ICA (FastICA, 14 components) -> Average reference
-    -> 2s epochs -> Artifact rejection (max 30% loss)
+    Resample to 250 Hz -> Bandpass 0.5-45 Hz -> Notch 50 Hz -> Edge trim 0.5s
+    -> Bad channel detection (MAD z-score + correlation)
+    -> ICA (FastICA, fitted on 1 Hz copy, applied to 0.5 Hz original)
+    -> Interpolate bad channels AFTER ICA -> Average reference
+    -> 2s epochs -> AutoReject artifact rejection (max 30% loss, lenient fallback)
     |
     v
 STAGE 2: Feature Extraction (~920 features per subject)
@@ -53,16 +82,18 @@ STAGE 2: Feature Extraction (~920 features per subject)
     v
 STAGE 3: Behavioral Data Merge
     AUFEI-O domain scores + Flanker Effect + Digit Span + demographics
-    -> median-split EF groups (high/low) for classification
+    -> Fold-internal median split (threshold from training data only)
     |
     v
 STAGE 4: Analysis
     4A. Correlations (H1-H3): TBR vs Global EF, Theta vs EF, TBR vs Flanker
-    4B. ML Classification (H4): 4 feature sets x 8 models, 5-fold CV x 10 repeats
-        Models: RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP, CNN-LSTM
-        Metrics: balanced accuracy, sensitivity, specificity, F1, AUC-ROC
+    4B. ML Classification (H4): 4 feature sets x 7 models, 5-fold CV x 10 repeats
+        Pipeline: Imputer -> Scaler -> SelectKBest -> Classifier
+        Models: RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP
+        Metrics: balanced accuracy [95% CI], sensitivity, specificity, F1, AUC-ROC
         Hyperparameter tuning: RandomizedSearchCV (nested CV)
-    4C. SHAP Feature Importance (H5): biomarker candidate identification
+        Validation: permutation test (500 perms), bootstrap CI (1000 resamples)
+    4C. SHAP Feature Importance (H5): per-CV-fold SHAP + biological interpretation
     |
     v
 STAGE 5: Quantum-Inspired Exploration (exploratory)
@@ -198,9 +229,16 @@ Key finding: quantum-inspired features (QEPP entanglement patterns, tensor netwo
 ```
 biomarker-iium-pipeline/
   run_all.py                # Main CLI orchestrator (stages 1-5)
+  evaluate.py               # Immutable pipeline evaluation harness (6 dimensions)
   validate_data.py          # Pre-flight data validation
   generate_figures.py       # Publication-quality figure generation
-  requirements.txt          # Python dependencies
+  convert_to_bids.py        # BIDS format conversion (mne-bids)
+  requirements.txt          # Python dependencies (pinned versions)
+  pyproject.toml            # Package metadata
+  Dockerfile                # Containerized reproducibility
+  Makefile                  # Build targets (stage1-5, evaluate, docker, bids)
+  METHODS.md                # Explicit mathematical formulations for all methods
+  AI_TRANSPARENCY.md        # AI-assisted development disclosure (COPE-compliant)
   CONTRIBUTING.md           # Team workflow + data safety rules
   configs/
     config.yaml             # All pipeline parameters (bands, channels, ML, etc.)

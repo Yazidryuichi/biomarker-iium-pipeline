@@ -876,6 +876,13 @@ def run_shap_analysis(df, config, best_info=None):
         print(f"    {row['feature']:40s}  SHAP: {row['mean_abs_shap']:.4f} "
               f"(+/-{row['shap_std_across_folds']:.4f}, {stability})")
 
+    # Biological interpretation of top biomarkers
+    try:
+        from utils.bio_interpretation import print_biomarker_report
+        print_biomarker_report(importance, top_n=10)
+    except Exception as e:
+        logger.warning(f"Biological interpretation skipped: {e}")
+
     # Save SHAP summary plot
     figures_dir = config["paths"]["figures_dir"]
     os.makedirs(figures_dir, exist_ok=True)
@@ -899,6 +906,18 @@ def run_shap_analysis(df, config, best_info=None):
         print(f"\n  SHAP summary plot saved: {figures_dir}/shap_summary.png")
     except Exception as e:
         print(f"  Could not save SHAP plot: {e}")
+
+    # Save annotated importance with biological interpretation
+    try:
+        from utils.bio_interpretation import interpret_biomarkers
+        annotated = interpret_biomarkers(importance)
+        annotated.to_csv(
+            os.path.join(config["paths"]["output_dir"], "shap_annotated.csv"),
+            index=False,
+        )
+        logger.info("Annotated SHAP importance saved")
+    except Exception:
+        pass
 
     return importance
 
