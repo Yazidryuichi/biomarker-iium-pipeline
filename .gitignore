@@ -18,6 +18,7 @@ Archives/
 # Pipeline outputs (regenerable)
 results/
 figures/
+!docs/figures/
 *.fif
 *.npz
 
