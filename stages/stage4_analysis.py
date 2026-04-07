@@ -254,8 +254,10 @@ def _build_models(random_state):
             def predict_proba(self, X):
                 return self._model.predict_proba(X)
 
-            def _more_tags(self):
-                return {"requires_y": True}
+            def __sklearn_tags__(self):
+                tags = super().__sklearn_tags__()
+                tags.estimator_type = "classifier"
+                return tags
 
         models["CatBoost"] = CatBoostWrapper(
             iterations=100, depth=3, learning_rate=0.1,
@@ -369,20 +371,18 @@ def run_classification(df, config):
             except Exception as e:
                 print(f"  {fs_name} | {model_name} | ERROR: {e}")
 
-    # CNN-LSTM (PyTorch-based, separate CV loop — optional)
-    try:
-        import signal
-
-        def _timeout_handler(signum, frame):
-            raise TimeoutError("CNN-LSTM timed out")
-
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(300)  # 5 minute timeout
-        cnn_lstm_results = _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config)
-        results.extend(cnn_lstm_results)
-        signal.alarm(0)
-    except (TimeoutError, Exception) as e:
-        print(f"  [INFO] CNN-LSTM skipped: {e}")
+    # CNN-LSTM (PyTorch-based, separate CV loop)
+    # Disabled by default: PyTorch hangs after sklearn joblib on macOS.
+    # Set RUN_CNN_LSTM=1 to enable.
+    import os as _os
+    if _os.environ.get("RUN_CNN_LSTM", "0") == "1":
+        try:
+            cnn_lstm_results = _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config)
+            results.extend(cnn_lstm_results)
+        except Exception as e:
+            print(f"  [INFO] CNN-LSTM failed: {e}")
+    else:
+        print("  [INFO] CNN-LSTM skipped (set RUN_CNN_LSTM=1 to enable)")
 
     # Hyperparameter tuning on best feature set (proposal Section 3.5.2)
     if results:
