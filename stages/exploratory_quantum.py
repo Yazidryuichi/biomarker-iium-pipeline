@@ -479,13 +479,65 @@ def run_quantum_exploration(config, epochs_dict, full_df):
     print(f"{'Feature Set':35s} | {'Model':20s} | {'Bal. Accuracy':15s} | {'AUC':8s}")
     print("-" * 85)
 
+    # Build all models matching Stage 4 (proposal Section 2.4.2)
+    models_to_test = [
+        ("LogisticRegression", LogisticRegression(max_iter=1000, C=0.1, random_state=42)),
+        ("RandomForest", RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42)),
+        ("SVM", __import__("sklearn.svm", fromlist=["SVC"]).SVC(
+            kernel="rbf", C=1.0, probability=True, random_state=42)),
+        ("KNN", __import__("sklearn.neighbors", fromlist=["KNeighborsClassifier"]).KNeighborsClassifier(
+            n_neighbors=5)),
+        ("MLP", __import__("sklearn.neural_network", fromlist=["MLPClassifier"]).MLPClassifier(
+            hidden_layer_sizes=(64, 32), max_iter=500, early_stopping=True, random_state=42)),
+    ]
+
+    # Optional: gradient boosting models
+    try:
+        from xgboost import XGBClassifier
+        models_to_test.append(("XGBoost", XGBClassifier(
+            n_estimators=50, max_depth=3, learning_rate=0.1,
+            random_state=42, use_label_encoder=False,
+            eval_metric="logloss", verbosity=0)))
+    except ImportError:
+        pass
+
+    try:
+        from lightgbm import LGBMClassifier
+        models_to_test.append(("LightGBM", LGBMClassifier(
+            n_estimators=100, max_depth=3, learning_rate=0.1,
+            num_leaves=8, min_child_samples=5,
+            random_state=42, verbose=-1)))
+    except ImportError:
+        pass
+
+    try:
+        from catboost import CatBoostClassifier as _CatBoost
+        from sklearn.base import BaseEstimator, ClassifierMixin
+
+        class _CatBoostWrap(BaseEstimator, ClassifierMixin):
+            _estimator_type = "classifier"
+            def __init__(self): pass
+            def fit(self, X, y):
+                self._m = _CatBoost(iterations=100, depth=3, learning_rate=0.1,
+                                    random_seed=42, verbose=0)
+                self._m.fit(X, y)
+                self.classes_ = np.array(sorted(set(y)))
+                return self
+            def predict(self, X): return self._m.predict(X).flatten().astype(int)
+            def predict_proba(self, X): return self._m.predict_proba(X)
+            def __sklearn_tags__(self):
+                tags = super().__sklearn_tags__()
+                tags.estimator_type = "classifier"
+                return tags
+
+        models_to_test.append(("CatBoost", _CatBoostWrap()))
+    except ImportError:
+        pass
+
     results = []
     for fs_name, X in feature_sets.items():
         n_sel = min(10, X.shape[1])
-        for model_name, model in [
-            ("LogisticRegression", LogisticRegression(max_iter=1000, C=0.1)),
-            ("RandomForest", RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42)),
-        ]:
+        for model_name, model in models_to_test:
             pipe = Pipeline([
                 ("scaler", StandardScaler()),
                 ("select", SelectKBest(f_classif, k=n_sel)),
@@ -493,14 +545,23 @@ def run_quantum_exploration(config, epochs_dict, full_df):
             ])
 
             try:
+                from sklearn.metrics import make_scorer, recall_score
+                scoring = {
+                    "balanced_accuracy": "balanced_accuracy",
+                    "roc_auc": "roc_auc",
+                    "sensitivity": make_scorer(recall_score, pos_label=1),
+                    "specificity": make_scorer(recall_score, pos_label=0),
+                }
                 scores = cross_validate(
                     pipe, X, y, cv=cv,
-                    scoring=["balanced_accuracy", "roc_auc"],
+                    scoring=scoring,
                     error_score="raise",
                 )
                 acc = np.mean(scores["test_balanced_accuracy"])
                 auc = np.mean(scores["test_roc_auc"])
                 std = np.std(scores["test_balanced_accuracy"])
+                sens = np.mean(scores["test_sensitivity"])
+                spec = np.mean(scores["test_specificity"])
 
                 results.append({
                     "feature_set": fs_name,
@@ -508,6 +569,8 @@ def run_quantum_exploration(config, epochs_dict, full_df):
                     "balanced_accuracy": round(acc, 3),
                     "std": round(std, 3),
                     "auc": round(auc, 3),
+                    "sensitivity": round(sens, 3),
+                    "specificity": round(spec, 3),
                 })
 
                 print(f"{fs_name:35s} | {model_name:20s} | "
