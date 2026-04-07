@@ -217,7 +217,28 @@ pipeline/
 
 ---
 
-## 7. Environment
+## 7. Stage 5 Upgrade (Quantum Exploration)
+
+Stage 5 (`exploratory_quantum.py`) now also uses all 7 sklearn-compatible models (previously only LogReg + RF). This means the quantum vs classical comparison produces 21 results instead of 6.
+
+**Previous results (2 models only):**
+
+| Feature Set | Best Model | Bal. Acc | AUC |
+|-------------|-----------|---------|-----|
+| Quantum only | LogReg | **0.657** | 0.694 |
+| Classical only | RF | 0.585 | 0.662 |
+| Combined | LogReg | 0.608 | 0.634 |
+
+**To regenerate with all models:**
+```bash
+python run_all.py --stage 5
+```
+
+This requires Stage 1 outputs (cleaned epochs) to exist in `results/cleaned_epochs/`.
+
+---
+
+## 8. Environment
 
 The pipeline was developed and tested on:
 - macOS Darwin 25.4.0 (Apple Silicon)
