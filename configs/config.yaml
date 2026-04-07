@@ -2,8 +2,8 @@
 # ================================================
 
 paths:
-  edf_dir: "../EF_Biomarker/EDF_Files"
-  behavioral_dir: ".."
+  edf_dir: "./EF_Biomarker/EDF_Files"
+  behavioral_dir: "./data_root"
   output_dir: "./results"
   figures_dir: "./figures"
 

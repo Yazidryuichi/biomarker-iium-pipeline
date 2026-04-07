@@ -6,6 +6,7 @@ Stage 4: Statistical Analysis + ML Classification
 4C. SHAP analysis for biomarker identification (H5)
 """
 
+import gc
 import json
 import logging
 import os
@@ -433,6 +434,8 @@ def run_classification(df, config):
             except Exception as e:
                 logger.error(f"{fs_name} | {model_name} | {e}")
                 print(f"  {fs_name} | {model_name} | ERROR: {e}")
+            finally:
+                gc.collect()  # Free memory between model runs
 
     # CNN-LSTM (PyTorch-based, separate CV loop)
     # Disabled by default: PyTorch hangs after sklearn joblib on macOS.
@@ -475,11 +478,14 @@ def run_classification(df, config):
             n_splits=cv_folds, n_repeats=3, random_state=random_state
         )
         try:
+            # n_jobs=1 to prevent OOM on macOS (18GB RAM).
+            # n_jobs=-1 spawns parallel workers that each clone the full
+            # dataset — causes OOM kill with 941 features x 8 models.
             score_real, perm_scores, perm_pvalue = permutation_test_score(
                 pipe_perm, X_perm, y_global,
                 scoring="balanced_accuracy", cv=cv_perm,
-                n_permutations=500, random_state=random_state,
-                n_jobs=-1,
+                n_permutations=200, random_state=random_state,
+                n_jobs=1,
             )
             print(f"    Real score: {score_real:.3f}")
             print(f"    Permutation mean: {np.mean(perm_scores):.3f}")
@@ -569,7 +575,7 @@ def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
         search = RandomizedSearchCV(
             pipe, param_dist, n_iter=20, cv=inner_cv,
             scoring="balanced_accuracy", random_state=random_state,
-            n_jobs=-1, refit=True,
+            n_jobs=1, refit=True,  # n_jobs=1 to prevent OOM on macOS
         )
 
         # Nested CV evaluation

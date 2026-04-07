@@ -13,6 +13,8 @@ Usage:
     annotated = interpret_biomarkers(shap_importance_df)
 """
 
+import pandas as pd
+
 # Biological annotation database
 # Each entry: feature_prefix -> {system, mechanism, ef_relevance, references}
 BIOMARKER_ANNOTATIONS = {
@@ -303,7 +305,6 @@ def interpret_biomarkers(importance_df):
     ann_df = pd.DataFrame(annotations)
 
     # Merge with original importance
-    import pandas as pd
     result = importance_df.merge(ann_df, on="feature", how="left")
     return result
 
@@ -337,6 +338,3 @@ def print_biomarker_report(importance_df, top_n=10):
     print("Quantum-inspired features are EXPLORATORY and require validation.")
     print(f"{'=' * 70}")
 
-
-# Needed for interpret_biomarkers
-import pandas as pd
