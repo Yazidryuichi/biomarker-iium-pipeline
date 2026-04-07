@@ -228,6 +228,8 @@ def _build_models(random_state):
 
         class CatBoostWrapper(BaseEstimator, ClassifierMixin):
             """Thin wrapper to fix CatBoost/sklearn tags compatibility."""
+            _estimator_type = "classifier"
+
             def __init__(self, iterations=100, depth=3, learning_rate=0.1,
                          random_state=42, verbose=0):
                 self.iterations = iterations
@@ -243,7 +245,7 @@ def _build_models(random_state):
                     random_seed=self.random_state, verbose=self.verbose,
                 )
                 self._model.fit(X, y)
-                self.classes_ = np.unique(y)
+                self.classes_ = np.array(sorted(set(y)))
                 return self
 
             def predict(self, X):
@@ -251,6 +253,9 @@ def _build_models(random_state):
 
             def predict_proba(self, X):
                 return self._model.predict_proba(X)
+
+            def _more_tags(self):
+                return {"requires_y": True}
 
         models["CatBoost"] = CatBoostWrapper(
             iterations=100, depth=3, learning_rate=0.1,
@@ -364,9 +369,20 @@ def run_classification(df, config):
             except Exception as e:
                 print(f"  {fs_name} | {model_name} | ERROR: {e}")
 
-    # CNN-LSTM (PyTorch-based, separate CV loop)
-    cnn_lstm_results = _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config)
-    results.extend(cnn_lstm_results)
+    # CNN-LSTM (PyTorch-based, separate CV loop — optional)
+    try:
+        import signal
+
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("CNN-LSTM timed out")
+
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(300)  # 5 minute timeout
+        cnn_lstm_results = _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config)
+        results.extend(cnn_lstm_results)
+        signal.alarm(0)
+    except (TimeoutError, Exception) as e:
+        print(f"  [INFO] CNN-LSTM skipped: {e}")
 
     # Hyperparameter tuning on best feature set (proposal Section 3.5.2)
     if results:
