@@ -76,7 +76,7 @@ STAGE 5: Quantum-Inspired Exploration (exploratory)
 
 ```bash
 # Clone and install
-git clone https://github.com/Ladykiller101/biomarker-iium-pipeline.git
+git clone https://github.com/Yazidryuichi/biomarker-iium-pipeline.git
 cd biomarker-iium-pipeline
 pip install -r requirements.txt
 

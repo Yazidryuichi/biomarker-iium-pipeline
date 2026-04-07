@@ -6,7 +6,7 @@
 
 1. Clone the repo and install dependencies:
    ```bash
-   git clone https://github.com/Ladykiller101/biomarker-iium-pipeline.git
+   git clone https://github.com/Yazidryuichi/biomarker-iium-pipeline.git
    cd biomarker-iium-pipeline
    pip install -r requirements.txt
    ```
