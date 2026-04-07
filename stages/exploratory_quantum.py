@@ -205,19 +205,24 @@ def compute_quantum_probability_features(epochs, bands):
             if len(a) < 10:
                 continue
 
-            # Discretize into bins
-            a_bins = np.digitize(a, np.linspace(a.min(), a.max(), n_bins + 1)[1:-1])
-            b_bins = np.digitize(b, np.linspace(b.min(), b.max(), n_bins + 1)[1:-1])
+            # Discretize into bins (clip to prevent overflow at boundaries)
+            a_bins = np.clip(
+                np.digitize(a, np.linspace(a.min(), a.max(), n_bins + 1)[1:-1]),
+                0, n_bins - 1
+            )
+            b_bins = np.clip(
+                np.digitize(b, np.linspace(b.min(), b.max(), n_bins + 1)[1:-1]),
+                0, n_bins - 1
+            )
 
             # Marginal distributions
             p_a = np.bincount(a_bins, minlength=n_bins) / len(a_bins)
             p_b = np.bincount(b_bins, minlength=n_bins) / len(b_bins)
 
-            # Joint distribution
+            # Joint distribution (all samples included — no silent drops)
             joint_counts = np.zeros((n_bins, n_bins))
             for ai, bi in zip(a_bins, b_bins):
-                if ai < n_bins and bi < n_bins:
-                    joint_counts[ai, bi] += 1
+                joint_counts[ai, bi] += 1
             p_joint = joint_counts / joint_counts.sum() if joint_counts.sum() > 0 else joint_counts
 
             # Classical (independent) prediction
@@ -327,10 +332,14 @@ def compute_tensor_features(epochs, bands):
             entropy_parietal = -np.sum(eigs_p * np.log2(eigs_p + 1e-15))
             features[f"tn_entropy_parietal_{band_name}"] = entropy_parietal
 
-            # Mutual information: S(frontal) + S(parietal) - S(total)
-            # Positive = frontal and parietal are correlated
-            mi = entropy_frontal + entropy_parietal - vn_entropy
-            features[f"tn_mutual_info_fp_{band_name}"] = mi
+            # Submatrix entropy difference (analogous to mutual information):
+            # S(frontal) + S(parietal) - S(total)
+            # Note: this is NOT quantum mutual information (which requires
+            # partial trace over tensor product structure). The covariance
+            # submatrix is not a proper partial trace. We name it
+            # "entropy_coupling" to avoid confusion.
+            entropy_coupling = entropy_frontal + entropy_parietal - vn_entropy
+            features[f"tn_entropy_coupling_fp_{band_name}"] = entropy_coupling
 
     # Cross-band features: how does the density matrix structure change
     # between bands? Non-commutativity test.
@@ -603,10 +612,92 @@ def run_quantum_exploration(config, epochs_dict, full_df):
         print(f"  Quantum lift:    {delta:+.3f} "
               f"({'quantum adds value' if delta > 0.02 else 'no clear benefit'})")
 
+    # Sensitivity analysis: how does n_bins affect quantum probability features?
+    print("\n--- Quantum Binning Sensitivity Analysis ---")
+    bands = config["features"]["bands"]
+
+    # Build subject lookup from epochs_dict
+    _subjects = {}
+    for (sub, cond), epochs in epochs_dict.items():
+        if sub not in _subjects:
+            _subjects[sub] = {}
+        _subjects[sub][cond] = epochs
+
+    sens_results = []
+    for n_bins_test in [5, 8, 10, 15, 20]:
+        # Test on first subject for efficiency
+        test_sub = sorted(_subjects.keys())[0] if _subjects else None
+        if test_sub:
+            test_epochs = _subjects[test_sub].get("Eyes_Open",
+                list(_subjects[test_sub].values())[0])
+            # Temporarily modify n_bins in compute function
+            test_feats = _compute_qi_with_nbins(test_epochs, bands, n_bins_test)
+            mean_interf = np.mean([v for v in test_feats.values() if np.isfinite(v)])
+            sens_results.append({
+                "n_bins": n_bins_test,
+                "n_features": len(test_feats),
+                "mean_interference": round(mean_interf, 6),
+            })
+            print(f"  n_bins={n_bins_test:2d}: {len(test_feats)} features, "
+                  f"mean |interference|={mean_interf:.6f}")
+
+    if sens_results:
+        pd.DataFrame(sens_results).to_csv(
+            os.path.join(output_dir, "quantum_binning_sensitivity.csv"),
+            index=False
+        )
+
     print(f"\nQuantum features saved: {output_dir}/quantum_features.csv")
     print(f"Comparison saved: {output_dir}/quantum_vs_classical.csv")
 
     return quantum_df
+
+
+def _compute_qi_with_nbins(epochs, bands, n_bins):
+    """Helper for sensitivity analysis: quantum probability with variable n_bins."""
+    data = epochs.get_data()
+    sfreq = epochs.info["sfreq"]
+    ch_names = epochs.ch_names
+    n_channels = len(ch_names)
+    features = {}
+
+    band_powers = {}
+    for band_name, (fmin, fmax) in bands.items():
+        sos = sig.butter(4, [fmin, fmax], btype="band", fs=sfreq, output="sos")
+        powers = []
+        for epoch in data:
+            filtered = np.array([sig.sosfilt(sos, epoch[ch]) for ch in range(n_channels)])
+            power = np.mean(filtered ** 2, axis=1)
+            powers.append(power)
+        band_powers[band_name] = np.array(powers)
+
+    band_pairs = [("theta", "beta"), ("theta", "alpha")]
+    for band_a, band_b in band_pairs:
+        if band_a not in band_powers or band_b not in band_powers:
+            continue
+        for ch_idx, ch in enumerate(ch_names):
+            if ch not in ["Fz", "F3", "F4", "Cz"]:
+                continue
+            a = band_powers[band_a][:, ch_idx]
+            b = band_powers[band_b][:, ch_idx]
+            if len(a) < 10:
+                continue
+
+            a_bins = np.clip(np.digitize(a, np.linspace(a.min(), a.max(), n_bins + 1)[1:-1]), 0, n_bins - 1)
+            b_bins = np.clip(np.digitize(b, np.linspace(b.min(), b.max(), n_bins + 1)[1:-1]), 0, n_bins - 1)
+
+            p_a = np.bincount(a_bins, minlength=n_bins) / len(a_bins)
+            p_b = np.bincount(b_bins, minlength=n_bins) / len(b_bins)
+
+            joint_counts = np.zeros((n_bins, n_bins))
+            for ai, bi in zip(a_bins, b_bins):
+                joint_counts[ai, bi] += 1
+            p_joint = joint_counts / joint_counts.sum() if joint_counts.sum() > 0 else joint_counts
+
+            interference = p_joint - np.outer(p_a, p_b)
+            features[f"qi_mean_{band_a}_{band_b}_{ch}"] = np.mean(np.abs(interference))
+
+    return features
 
 
 if __name__ == "__main__":

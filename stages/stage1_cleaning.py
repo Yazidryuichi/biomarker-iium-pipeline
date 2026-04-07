@@ -15,6 +15,7 @@ References:
 """
 
 import json
+import logging
 import os
 import warnings
 from pathlib import Path
@@ -24,6 +25,8 @@ import numpy as np
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 mne.set_log_level("WARNING")
+
+logger = logging.getLogger("biomarker_iium.stage1")
 
 
 def read_edf(filepath, config):
@@ -111,6 +114,10 @@ def run_ica(raw, config):
     Run ICA for artifact removal.
     Conservative: only remove components clearly identified as
     eye blinks or muscle artifacts.
+
+    Per MNE/HAPPE best practices:
+      - Fit ICA on a 1 Hz high-pass copy (slow drifts degrade ICA)
+      - Apply the resulting ICA solution to the original 0.5 Hz data
     """
     n_components = config["cleaning"]["ica_n_components"]
     method = config["cleaning"]["ica_method"]
@@ -121,7 +128,11 @@ def run_ica(raw, config):
         random_state=42,
         max_iter="auto",
     )
-    ica.fit(raw, verbose=False)
+
+    # Fit ICA on 1 Hz high-pass filtered copy for better decomposition
+    # (HAPPE recommendation: slow drifts < 1 Hz degrade ICA quality)
+    raw_for_ica = raw.copy().filter(l_freq=1.0, h_freq=None, verbose=False)
+    ica.fit(raw_for_ica, verbose=False)
 
     # Auto-detect EOG components using Fp1/Fp2, tracking scores
     scored_components = []
@@ -195,25 +206,43 @@ def reject_bad_epochs(epochs, config):
         reject = dict(eeg=150e-6)  # 150 uV
 
     n_before = len(epochs)
+    epochs_orig = epochs.copy()
     epochs.drop_bad(reject=reject, verbose=False)
     n_after = len(epochs)
     n_dropped = n_before - n_after
     pct_dropped = n_dropped / n_before if n_before > 0 else 0
 
+    # Default: use the result of initial rejection
+    epochs_clean = epochs
+
     max_pct = config["cleaning"]["max_reject_pct"]
 
     # If too many epochs rejected, loosen threshold and retry
     if pct_dropped > max_pct and n_before > 0:
-        # Use a more lenient threshold
         reject_lenient = {k: v * 1.5 for k, v in reject.items()}
-        # Re-create epochs from scratch would be needed here
-        # For now, warn
-        print(
-            f"    WARNING: {pct_dropped:.0%} epochs rejected "
-            f"(>{max_pct:.0%} limit). Consider looser thresholds."
-        )
+        # Retry with lenient threshold on original epochs
+        epochs_retry = epochs_orig.copy()
+        epochs_retry.drop_bad(reject=reject_lenient, verbose=False)
+        n_retry = len(epochs_retry)
+        pct_retry = (n_before - n_retry) / n_before
 
-    return epochs, reject, n_dropped, pct_dropped
+        if pct_retry <= max_pct:
+            print(
+                f"    INFO: Relaxed threshold recovered epochs "
+                f"({pct_dropped:.0%} -> {pct_retry:.0%} rejected)"
+            )
+            epochs_clean = epochs_retry
+            n_dropped = n_before - n_retry
+            pct_dropped = pct_retry
+            reject = reject_lenient
+        else:
+            print(
+                f"    WARNING: {pct_dropped:.0%} epochs rejected "
+                f"(>{max_pct:.0%} limit). Lenient threshold still "
+                f"rejects {pct_retry:.0%}."
+            )
+
+    return epochs_clean, reject, n_dropped, pct_dropped
 
 
 def clean_single_file(filepath, config, subject_id, condition):
@@ -233,23 +262,38 @@ def clean_single_file(filepath, config, subject_id, condition):
     qc["sfreq"] = raw.info["sfreq"]
     qc["n_channels_raw"] = len(raw.ch_names)
 
+    # Enforce target sampling rate (EDF files may vary)
+    target_sfreq = config["recording"]["sfreq"]
+    if raw.info["sfreq"] != target_sfreq:
+        original_sfreq = raw.info["sfreq"]
+        raw.resample(target_sfreq, verbose=False)
+        qc["resampled_from"] = original_sfreq
+
     # Filter
     raw = apply_filters(raw, config)
 
-    # Bad channel detection
+    # Trim filter edge artifacts (0.5s from each end)
+    raw.crop(tmin=0.5, tmax=raw.times[-1] - 0.5)
+
+    # Bad channel detection — mark but do NOT interpolate yet
+    # (HAPPE protocol: interpolate AFTER ICA, not before, because
+    # interpolated channels inject smoothed data that degrades ICA)
     bad_channels = detect_bad_channels(raw, config)
     qc["bad_channels"] = bad_channels
     qc["n_bad_channels"] = len(bad_channels)
 
     if bad_channels:
         raw.info["bads"] = bad_channels
-        raw.interpolate_bads(verbose=False)
 
-    # ICA before average reference (HAPPE protocol: ICA on non-averaged data,
-    # then re-reference after component removal)
+    # ICA on non-averaged, non-interpolated data
+    # (ICA automatically excludes channels marked as bads)
     raw_clean, ica, excluded_ics = run_ica(raw, config)
 
-    # Re-reference to average AFTER ICA (avoids reference constraint in ICA)
+    # Interpolate bad channels AFTER ICA component removal
+    if bad_channels:
+        raw_clean.interpolate_bads(verbose=False)
+
+    # Re-reference to average AFTER ICA + interpolation
     raw_clean.set_eeg_reference("average", verbose=False)
     qc["ica_excluded"] = excluded_ics
     qc["n_ica_excluded"] = len(excluded_ics)

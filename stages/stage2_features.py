@@ -9,6 +9,7 @@ Extracts three tiers of features from cleaned epochs:
 Output: features.csv (one row per subject, ~200+ columns)
 """
 
+import logging
 import os
 import warnings
 
@@ -21,6 +22,8 @@ from scipy.stats import entropy as sp_entropy
 
 warnings.filterwarnings("ignore")
 mne.set_log_level("ERROR")
+
+logger = logging.getLogger("biomarker_iium.stage2")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -107,8 +110,8 @@ def extract_faa(epochs, bands, left_ch, right_ch):
     if left_ch in ch_names and right_ch in ch_names:
         left_idx = ch_names.index(left_ch)
         right_idx = ch_names.index(right_ch)
-        alpha_left = np.sum(psd_data[left_idx, alpha_mask])
-        alpha_right = np.sum(psd_data[right_idx, alpha_mask])
+        alpha_left = np.trapz(psd_data[left_idx, alpha_mask], freqs[alpha_mask])
+        alpha_right = np.trapz(psd_data[right_idx, alpha_mask], freqs[alpha_mask])
 
         faa = np.log(alpha_right + 1e-10) - np.log(alpha_left + 1e-10)
         features["faa_F4_F3"] = faa
@@ -138,8 +141,8 @@ def extract_alpha_reactivity(epochs_eo, epochs_ec, bands):
     mean_eo = np.mean(psd_eo.get_data(), axis=0)
     mean_ec = np.mean(psd_ec.get_data(), axis=0)
 
-    alpha_eo = np.mean(np.sum(mean_eo[:, alpha_mask], axis=1))
-    alpha_ec = np.mean(np.sum(mean_ec[:, alpha_mask], axis=1))
+    alpha_eo = np.mean(np.trapz(mean_eo[:, alpha_mask], freqs[alpha_mask], axis=1))
+    alpha_ec = np.mean(np.trapz(mean_ec[:, alpha_mask], freqs[alpha_mask], axis=1))
 
     # Reactivity: how much alpha drops from EC to EO
     reactivity = (alpha_ec - alpha_eo) / (alpha_ec + 1e-10)
@@ -150,8 +153,8 @@ def extract_alpha_reactivity(epochs_eo, epochs_ec, bands):
         ch_names = epochs_eo.ch_names
         if ch in ch_names:
             idx = ch_names.index(ch)
-            eo_alpha = np.sum(mean_eo[idx, alpha_mask])
-            ec_alpha = np.sum(mean_ec[idx, alpha_mask])
+            eo_alpha = np.trapz(mean_eo[idx, alpha_mask], freqs[alpha_mask])
+            ec_alpha = np.trapz(mean_ec[idx, alpha_mask], freqs[alpha_mask])
             r = (ec_alpha - eo_alpha) / (ec_alpha + 1e-10)
             features[f"alpha_reactivity_{ch}"] = r
 
@@ -161,6 +164,10 @@ def extract_alpha_reactivity(epochs_eo, epochs_ec, bands):
 def extract_coherence(epochs, coherence_pairs, bands):
     """
     Coherence between channel pairs in each frequency band.
+
+    Uses per-epoch coherence estimation averaged across epochs,
+    instead of concatenating epochs (which creates discontinuity
+    artifacts at epoch boundaries).
     """
     data = epochs.get_data()
     sfreq = epochs.info["sfreq"]
@@ -173,16 +180,17 @@ def extract_coherence(epochs, coherence_pairs, bands):
         idx1 = ch_names.index(ch1)
         idx2 = ch_names.index(ch2)
 
-        # Concatenate all epochs for more robust coherence estimation
-        # (per-epoch with 2s segments gives only 3 sub-segments — unreliable)
-        concat_ch1 = data[:, idx1, :].ravel()
-        concat_ch2 = data[:, idx2, :].ravel()
+        # Compute coherence per epoch, then average
+        epoch_cohs = []
+        for ep in range(data.shape[0]):
+            f, coh = sig.coherence(
+                data[ep, idx1, :], data[ep, idx2, :],
+                fs=sfreq, nperseg=int(sfreq * 1.0),
+                noverlap=int(sfreq * 0.5),
+            )
+            epoch_cohs.append(coh)
 
-        f, mean_coh = sig.coherence(
-            concat_ch1, concat_ch2,
-            fs=sfreq, nperseg=int(sfreq * 2.0),
-            noverlap=int(sfreq * 1.0),
-        )
+        mean_coh = np.mean(epoch_cohs, axis=0)
 
         for band_name, (fmin, fmax) in bands.items():
             mask = (f >= fmin) & (f < fmax)

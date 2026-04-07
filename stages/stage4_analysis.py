@@ -7,6 +7,7 @@ Stage 4: Statistical Analysis + ML Classification
 """
 
 import json
+import logging
 import os
 import warnings
 
@@ -15,6 +16,8 @@ import pandas as pd
 from scipy import stats
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger("biomarker_iium.stage4")
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -96,31 +99,32 @@ def run_correlations(df, config):
         if len(x) < 5:
             continue
 
-        # Normality test
-        _, p_norm_x = stats.shapiro(x)
-        _, p_norm_y = stats.shapiro(y)
+        # Use Spearman for all tests (robust to non-normality with N=28).
+        # Pearson reported as supplementary. Do not condition method on
+        # normality test — that is a form of double-dipping.
+        r_spearman, p_spearman = stats.spearmanr(x, y)
+        r_pearson, p_pearson = stats.pearsonr(x, y)
 
-        # Use Pearson if both normal, else Spearman
-        if p_norm_x > 0.05 and p_norm_y > 0.05:
-            r, p = stats.pearsonr(x, y)
-            method = "Pearson"
-        else:
-            r, p = stats.spearmanr(x, y)
-            method = "Spearman"
+        # Effect size: r-to-d conversion (Cohen 1988; Fritz et al. 2012)
+        cohens_d = 2 * r_spearman / np.sqrt(1 - r_spearman**2 + 1e-10)
 
         results.append({
             "hypothesis": label,
             "x": x_col,
             "y": y_col,
-            "method": method,
-            "r": round(r, 3),
-            "p": round(p, 4),
+            "method": "Spearman",
+            "r": round(r_spearman, 3),
+            "p": round(p_spearman, 4),
+            "r_pearson": round(r_pearson, 3),
+            "p_pearson": round(p_pearson, 4),
+            "effect_size_d": round(cohens_d, 3),
             "n": len(x),
-            "sig": "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns",
+            "sig": "***" if p_spearman < 0.001 else "**" if p_spearman < 0.01 else "*" if p_spearman < 0.05 else "ns",
         })
 
         print(f"  {label}")
-        print(f"    {method} r = {r:.3f}, p = {p:.4f}, n = {len(x)} {'*' if p < 0.05 else 'ns'}")
+        print(f"    Spearman r = {r_spearman:.3f}, p = {p_spearman:.4f}, n = {len(x)} {'*' if p_spearman < 0.05 else 'ns'}")
+        print(f"    (Pearson r = {r_pearson:.3f}, p = {p_pearson:.4f})")
 
     # FDR correction
     if results:
@@ -189,9 +193,11 @@ def _build_models(random_state):
 
     models = {
         "RandomForest": RandomForestClassifier(
-            n_estimators=100, max_depth=3, random_state=random_state
+            n_estimators=100, max_depth=3,
+            class_weight="balanced", random_state=random_state
         ),
-        "SVM": SVC(kernel="rbf", C=1.0, probability=True, random_state=random_state),
+        "SVM": SVC(kernel="rbf", C=1.0, probability=True,
+                   class_weight="balanced", random_state=random_state),
         "KNN": KNeighborsClassifier(n_neighbors=5),
         "MLP": MLPClassifier(
             hidden_layer_sizes=(64, 32), max_iter=500,
@@ -289,22 +295,33 @@ def run_classification(df, config):
     Implements all 8 algorithms from the research proposal (Section 2.4.2):
     RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP, CNN-LSTM.
     """
-    from sklearn.model_selection import RepeatedStratifiedKFold, cross_validate
+    from sklearn.model_selection import RepeatedStratifiedKFold, \
+        permutation_test_score
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
     from sklearn.feature_selection import SelectKBest, f_classif
+    from sklearn.metrics import balanced_accuracy_score, f1_score, \
+        roc_auc_score, recall_score
 
+    logger.info("4B. ML Classification")
     print("\n" + "-" * 40)
     print("4B. ML Classification")
     print("-" * 40)
 
-    target_col = "ef_group_global"
-    if target_col not in df.columns or df[target_col].isna().all():
+    # Use continuous EF scores — median split done INSIDE each CV fold
+    # to prevent target leakage (threshold from training fold only)
+    continuous_col = "Global_EF"
+    if continuous_col not in df.columns or df[continuous_col].isna().all():
         print("  ERROR: No valid classification target")
         return pd.DataFrame()
 
-    y = df[target_col].dropna().astype(int)
-    valid_idx = y.index
+    y_continuous = df[continuous_col].dropna()
+    valid_idx = y_continuous.index
+
+    # Global median split for permutation test (sklearn requires fixed y)
+    global_median = y_continuous.median()
+    y_global = (y_continuous > global_median).astype(int)
 
     feature_sets = get_feature_sets(df, config)
     cv_folds = config["ml"]["cv_folds"]
@@ -316,7 +333,6 @@ def run_classification(df, config):
     )
 
     models = _build_models(random_state)
-    scoring = _make_scoring()
 
     results = []
 
@@ -325,50 +341,97 @@ def run_classification(df, config):
         if not fs_cols_valid:
             continue
 
-        X = df.loc[valid_idx, fs_cols_valid].fillna(0)
+        X = df.loc[valid_idx, fs_cols_valid]
 
-        # Feature selection: keep at most 10 features (given N=28)
-        n_select = min(10, len(fs_cols_valid))
+        # Feature selection: adaptive k based on feature set size
+        n_select = max(5, min(15, len(fs_cols_valid) // 10))
+        n_select = min(n_select, len(fs_cols_valid))
 
         for model_name, model in models.items():
-            pipe = Pipeline([
-                ("scaler", StandardScaler()),
-                ("select", SelectKBest(f_classif, k=n_select)),
-                ("clf", model),
-            ])
+            # Manual CV loop with fold-internal median split
+            # This prevents target leakage: the binarization threshold
+            # is computed on TRAINING data only in each fold
+            fold_metrics = {
+                "bal_acc": [], "f1": [], "auc": [],
+                "sens": [], "spec": [],
+            }
 
             try:
-                scores = cross_validate(
-                    pipe, X, y, cv=cv,
-                    scoring=scoring,
-                    return_train_score=False,
-                    error_score="raise",
-                )
+                for train_idx, test_idx in cv.split(X, y_global):
+                    X_train = X.iloc[train_idx]
+                    X_test = X.iloc[test_idx]
+
+                    # Compute median on training fold only
+                    train_median = y_continuous.iloc[train_idx].median()
+                    y_train = (y_continuous.iloc[train_idx] > train_median).astype(int)
+                    y_test = (y_continuous.iloc[test_idx] > train_median).astype(int)
+
+                    pipe = Pipeline([
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                        ("select", SelectKBest(f_classif, k=n_select)),
+                        ("clf", model),
+                    ])
+
+                    pipe.fit(X_train, y_train)
+                    preds = pipe.predict(X_test)
+
+                    fold_metrics["bal_acc"].append(
+                        balanced_accuracy_score(y_test, preds))
+                    fold_metrics["f1"].append(
+                        f1_score(y_test, preds, zero_division=0))
+                    fold_metrics["sens"].append(
+                        recall_score(y_test, preds, pos_label=1, zero_division=0))
+                    fold_metrics["spec"].append(
+                        recall_score(y_test, preds, pos_label=0, zero_division=0))
+                    try:
+                        if hasattr(pipe, "predict_proba"):
+                            probs = pipe.predict_proba(X_test)[:, 1]
+                        else:
+                            probs = pipe.decision_function(X_test)
+                        fold_metrics["auc"].append(roc_auc_score(y_test, probs))
+                    except Exception:
+                        fold_metrics["auc"].append(0.5)
+
+                # Bootstrap 95% CI for balanced accuracy
+                ba_scores = np.array(fold_metrics["bal_acc"])
+                n_boot = 1000
+                rng = np.random.RandomState(random_state)
+                boot_means = [
+                    np.mean(rng.choice(ba_scores, size=len(ba_scores), replace=True))
+                    for _ in range(n_boot)
+                ]
+                ci_lower = np.percentile(boot_means, 2.5)
+                ci_upper = np.percentile(boot_means, 97.5)
 
                 result = {
                     "feature_set": fs_name,
                     "n_features_input": len(fs_cols_valid),
                     "n_features_selected": n_select,
                     "model": model_name,
-                    "balanced_accuracy": round(np.mean(scores["test_balanced_accuracy"]), 3),
-                    "bal_acc_std": round(np.std(scores["test_balanced_accuracy"]), 3),
-                    "f1": round(np.mean(scores["test_f1"]), 3),
-                    "auc": round(np.mean(scores["test_roc_auc"]), 3),
-                    "sensitivity": round(np.mean(scores["test_sensitivity"]), 3),
-                    "specificity": round(np.mean(scores["test_specificity"]), 3),
+                    "balanced_accuracy": round(np.mean(ba_scores), 3),
+                    "bal_acc_std": round(np.std(ba_scores), 3),
+                    "ci_lower": round(ci_lower, 3),
+                    "ci_upper": round(ci_upper, 3),
+                    "f1": round(np.mean(fold_metrics["f1"]), 3),
+                    "auc": round(np.mean(fold_metrics["auc"]), 3),
+                    "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
+                    "specificity": round(np.mean(fold_metrics["spec"]), 3),
                 }
                 results.append(result)
 
+                logger.info(f"{fs_name} | {model_name} | BA={result['balanced_accuracy']:.3f}")
                 print(
                     f"  {fs_name:30s} | {model_name:12s} | "
                     f"Acc: {result['balanced_accuracy']:.3f} "
-                    f"(+/-{result['bal_acc_std']:.3f}) | "
+                    f"[{ci_lower:.3f}-{ci_upper:.3f}] | "
                     f"Sens: {result['sensitivity']:.3f} | "
                     f"Spec: {result['specificity']:.3f} | "
                     f"F1: {result['f1']:.3f} | AUC: {result['auc']:.3f}"
                 )
 
             except Exception as e:
+                logger.error(f"{fs_name} | {model_name} | {e}")
                 print(f"  {fs_name} | {model_name} | ERROR: {e}")
 
     # CNN-LSTM (PyTorch-based, separate CV loop)
@@ -384,16 +447,60 @@ def run_classification(df, config):
     else:
         print("  [INFO] CNN-LSTM skipped (set RUN_CNN_LSTM=1 to enable)")
 
-    # Hyperparameter tuning on best feature set (proposal Section 3.5.2)
+    # Permutation test on best model to verify above-chance performance
+    # Uses global median split (required by sklearn: fixed y for permutation)
+    best_info = {}
     if results:
         results_df = pd.DataFrame(results)
         best_row = results_df.loc[results_df["balanced_accuracy"].idxmax()]
         best_fs = best_row["feature_set"]
+        best_model_name = best_row["model"]
+        best_info = {"feature_set": best_fs, "model": best_model_name}
+
+        print(f"\n  Permutation test on best model ({best_model_name}, {best_fs})...")
+        fs_cols_best = [c for c in feature_sets[best_fs] if c in df.columns]
+        X_perm = df.loc[valid_idx, fs_cols_best]
+        n_sel_perm = max(5, min(15, len(fs_cols_best) // 10))
+        n_sel_perm = min(n_sel_perm, len(fs_cols_best))
+
+        best_model = _build_models(random_state)[best_model_name]
+        pipe_perm = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("select", SelectKBest(f_classif, k=n_sel_perm)),
+            ("clf", best_model),
+        ])
+
+        cv_perm = RepeatedStratifiedKFold(
+            n_splits=cv_folds, n_repeats=3, random_state=random_state
+        )
+        try:
+            score_real, perm_scores, perm_pvalue = permutation_test_score(
+                pipe_perm, X_perm, y_global,
+                scoring="balanced_accuracy", cv=cv_perm,
+                n_permutations=500, random_state=random_state,
+                n_jobs=-1,
+            )
+            print(f"    Real score: {score_real:.3f}")
+            print(f"    Permutation mean: {np.mean(perm_scores):.3f}")
+            print(f"    p-value: {perm_pvalue:.4f}")
+            print(f"    Above chance: {'YES' if perm_pvalue < 0.05 else 'NO'}")
+            logger.info(f"Permutation test: p={perm_pvalue:.4f}")
+
+            for r in results:
+                if r["feature_set"] == best_fs and r["model"] == best_model_name:
+                    r["perm_p_value"] = round(perm_pvalue, 4)
+                    r["perm_mean"] = round(np.mean(perm_scores), 3)
+        except Exception as e:
+            print(f"    Permutation test failed: {e}")
+            logger.error(f"Permutation test failed: {e}")
+
+        # Hyperparameter tuning on best feature set (proposal Section 3.5.2)
         print(f"\n  Running hyperparameter tuning on best feature set: {best_fs}")
-        tuned = _run_tuned_classification(df, valid_idx, feature_sets[best_fs], y, config)
+        tuned = _run_tuned_classification(df, valid_idx, feature_sets[best_fs], y_global, config)
         results.extend(tuned)
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(results), best_info
 
 
 def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
@@ -405,6 +512,7 @@ def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
         RandomizedSearchCV, cross_val_predict
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
     from sklearn.feature_selection import SelectKBest, f_classif
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.svm import SVC
@@ -414,8 +522,9 @@ def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
 
     random_state = config["ml"]["random_state"]
     fs_cols_valid = [c for c in fs_cols if c in df.columns]
-    X = df.loc[valid_idx, fs_cols_valid].fillna(0)
-    n_select = min(10, len(fs_cols_valid))
+    X = df.loc[valid_idx, fs_cols_valid]  # no fillna — imputer handles NaN
+    n_select = max(5, min(15, len(fs_cols_valid) // 10))
+    n_select = min(n_select, len(fs_cols_valid))
 
     param_grids = {
         "RandomForest": {
@@ -451,6 +560,7 @@ def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
             continue
 
         pipe = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
             ("select", SelectKBest(f_classif, k=n_select)),
             ("clf", base_models[model_name]),
@@ -639,10 +749,13 @@ def _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config):
 # 4C. SHAP Analysis
 # ──────────────────────────────────────────────────────────────────
 
-def run_shap_analysis(df, config, best_feature_set="conventional_qeeg"):
+def run_shap_analysis(df, config, best_info=None):
     """
-    SHAP analysis on the best-performing model to identify
-    candidate biomarker features.
+    SHAP analysis on the best-performing model/feature-set combination
+    to identify candidate biomarker features.
+
+    Args:
+        best_info: dict with 'feature_set' and 'model' from classification
     """
     print("\n" + "-" * 40)
     print("4C. SHAP Feature Importance")
@@ -656,15 +769,23 @@ def run_shap_analysis(df, config, best_feature_set="conventional_qeeg"):
 
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
     from sklearn.feature_selection import SelectKBest, f_classif
 
-    target_col = "ef_group_global"
-    y = df[target_col].dropna().astype(int)
+    # Use best feature set from classification, or fall back to conventional
+    best_feature_set = (best_info or {}).get("feature_set", "conventional_qeeg")
+
+    # Use continuous EF with global median for SHAP labels
+    continuous_col = "Global_EF"
+    y_cont = df[continuous_col].dropna()
+    y = (y_cont > y_cont.median()).astype(int)
     valid_idx = y.index
 
     feature_sets = get_feature_sets(df, config)
     fs_cols = feature_sets.get(best_feature_set, [])
     fs_cols = [c for c in fs_cols if c in df.columns]
+
+    print(f"  Using feature set: {best_feature_set} ({len(fs_cols)} features)")
 
     if not fs_cols:
         print("  No features found for SHAP analysis")
@@ -691,37 +812,69 @@ def run_shap_analysis(df, config, best_feature_set="conventional_qeeg"):
     selected_names = [fs_cols[i] for i, m in enumerate(stable_mask) if m]
     X_selected = X[selected_names].values
 
-    # Fit model for SHAP interpretation (not for prediction claims)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_selected)
+    # Compute SHAP values per CV fold and average — avoids overfitting
+    # SHAP importance on a model trained on all 28 subjects is misleading.
+    from sklearn.model_selection import StratifiedKFold as _SKF
 
-    model = RandomForestClassifier(
+    random_state_shap = config["ml"]["random_state"]
+    cv_shap = _SKF(n_splits=5, shuffle=True, random_state=random_state_shap)
+
+    all_shap_values = []
+    feature_selection_counts = np.zeros(len(selected_names))
+
+    for fold_idx, (train_idx, test_idx) in enumerate(cv_shap.split(X_selected, y)):
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_selected[train_idx])
+        X_test_s = scaler.transform(X_selected[test_idx])
+
+        model = RandomForestClassifier(
+            n_estimators=100, max_depth=3,
+            class_weight="balanced",
+            random_state=random_state_shap,
+        )
+        model.fit(X_train_s, y.iloc[train_idx])
+
+        explainer = shap.TreeExplainer(model)
+        shap_fold = explainer.shap_values(X_test_s)
+
+        if isinstance(shap_fold, list):
+            shap_fold = shap_fold[1]
+        if shap_fold.ndim == 3:
+            shap_fold = shap_fold[:, :, 1]
+
+        all_shap_values.append(np.mean(np.abs(shap_fold), axis=0).ravel())
+
+    # Average SHAP importance across folds
+    mean_abs_shap = np.mean(all_shap_values, axis=0)
+    shap_std = np.std(all_shap_values, axis=0)
+
+    # Also compute SHAP on full data for the summary plot only
+    scaler_full = StandardScaler()
+    X_scaled = scaler_full.fit_transform(X_selected)
+    model_full = RandomForestClassifier(
         n_estimators=100, max_depth=3,
-        random_state=config["ml"]["random_state"]
+        class_weight="balanced",
+        random_state=random_state_shap,
     )
-    model.fit(X_scaled, y)
-
-    # SHAP
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_scaled)
-
-    # Feature importance ranking
+    model_full.fit(X_scaled, y)
+    explainer_full = shap.TreeExplainer(model_full)
+    shap_values = explainer_full.shap_values(X_scaled)
     if isinstance(shap_values, list):
-        shap_values = shap_values[1]  # class 1 (high EF)
-
-    # Handle multi-dimensional SHAP values
+        shap_values = shap_values[1]
     if shap_values.ndim == 3:
-        shap_values = shap_values[:, :, 1]  # class 1
-
-    mean_abs_shap = np.mean(np.abs(shap_values), axis=0).ravel()
+        shap_values = shap_values[:, :, 1]
     importance = pd.DataFrame({
         "feature": selected_names,
         "mean_abs_shap": mean_abs_shap,
+        "shap_std_across_folds": shap_std,
+        "shap_cv": shap_std / (mean_abs_shap + 1e-10),  # coefficient of variation
     }).sort_values("mean_abs_shap", ascending=False)
 
-    print("\n  Top biomarker candidates (by SHAP importance):")
+    print("\n  Top biomarker candidates (by SHAP importance, CV-averaged):")
     for _, row in importance.head(10).iterrows():
-        print(f"    {row['feature']:40s}  SHAP: {row['mean_abs_shap']:.4f}")
+        stability = "stable" if row["shap_cv"] < 0.5 else "unstable"
+        print(f"    {row['feature']:40s}  SHAP: {row['mean_abs_shap']:.4f} "
+              f"(+/-{row['shap_std_across_folds']:.4f}, {stability})")
 
     # Save SHAP summary plot
     figures_dir = config["paths"]["figures_dir"]
@@ -765,10 +918,10 @@ def run_stage4(config, full_df):
     corr_results = run_correlations(full_df, config)
 
     # 4B: ML Classification
-    ml_results = run_classification(full_df, config)
+    ml_results, best_info = run_classification(full_df, config)
 
-    # 4C: SHAP
-    shap_importance = run_shap_analysis(full_df, config)
+    # 4C: SHAP on best-performing model/feature-set
+    shap_importance = run_shap_analysis(full_df, config, best_info=best_info)
 
     # Save all results
     output_dir = config["paths"]["output_dir"]

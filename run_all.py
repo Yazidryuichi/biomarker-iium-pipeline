@@ -27,6 +27,7 @@ Dependencies:
 """
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -73,8 +74,24 @@ def main():
     # Change to pipeline directory
     os.chdir(PIPELINE_ROOT)
 
+    # Configure logging
+    log_dir = os.path.join(PIPELINE_ROOT, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        handlers=[
+            logging.FileHandler(
+                os.path.join(log_dir, "pipeline.log"), mode="a"
+            ),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+    logger = logging.getLogger("biomarker_iium")
+
     # Load config
     config = load_config(args.config)
+    logger.info("Pipeline started")
     print("=" * 60)
     print("BIOMARKER_IIUM ANALYSIS PIPELINE")
     print("=" * 60)
