@@ -39,7 +39,10 @@ STAGE 3: Behavioral Data Merge
     v
 STAGE 4: Analysis
     4A. Correlations (H1-H3): TBR vs Global EF, Theta vs EF, TBR vs Flanker
-    4B. ML Classification (H4): 4 feature sets x 4 models, 5-fold CV x 10 repeats
+    4B. ML Classification (H4): 4 feature sets x 8 models, 5-fold CV x 10 repeats
+        Models: RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP, CNN-LSTM
+        Metrics: balanced accuracy, sensitivity, specificity, F1, AUC-ROC
+        Hyperparameter tuning: RandomizedSearchCV (nested CV)
     4C. SHAP Feature Importance (H5): biomarker candidate identification
 ```
 
@@ -132,21 +135,24 @@ The pipeline compares four feature extraction approaches:
 - TBR at Cz shows strongest association with Global EF (r = -0.40, p = .035 uncorrected)
 - Effect in expected direction but underpowered at N=28
 
-### Classification (best per feature set)
+### Classification (best per feature set, 8 models)
 
-| Feature Set | Model | Balanced Accuracy |
-|-------------|-------|-------------------|
-| Conventional QEEG | SVM | 0.547 |
-| Conv. + Advanced | SVM | 0.533 |
-| **Covariance** | **RandomForest** | **0.595** |
-| All features | XGBoost | 0.512 |
+| Feature Set | Best Model | Balanced Accuracy | AUC |
+|-------------|-----------|-------------------|-----|
+| Conventional QEEG | XGBoost | 0.663 | 0.703 |
+| Conv. + Advanced | XGBoost | 0.558 | 0.606 |
+| Covariance only | XGBoost | 0.633 | 0.669 |
+| All features | RandomForest | 0.567 | 0.560 |
+
+H4 target (>=0.75) not yet met at N=28. Underpowered — target N=100.
 
 ### Top biomarker candidates (SHAP)
-1. Alpha reactivity at O1 (occipital desynchronization)
-2. Delta coherence Fz-Pz (fronto-parietal connectivity)
-3. Relative beta power at P4
-4. Beta coherence Fz-Pz
-5. TBR at Cz
+1. Beta coherence F3-P3 (fronto-parietal connectivity, SHAP=0.150)
+2. Absolute beta power Pz (parietal midline, SHAP=0.098)
+3. Alpha reactivity global (SHAP=0.057)
+4. Relative beta power F4 (right frontal, SHAP=0.051)
+5. TBR at Cz (SHAP=0.036)
+6. Absolute beta power O1 (SHAP=0.035)
 
 ## Project structure
 
@@ -174,12 +180,13 @@ biomarker-iium-pipeline/
 - MNE >= 1.6 (EEG processing)
 - AutoReject (artifact rejection)
 - PyWavelets (continuous wavelet transform)
-- scikit-learn, XGBoost, LightGBM (ML classification)
+- scikit-learn, XGBoost, LightGBM, CatBoost (ML classification)
 - SHAP (feature importance)
 - SciPy, statsmodels (statistical tests)
 - pandas, matplotlib, seaborn (data handling, visualization)
 
 Optional:
+- PyTorch (CNN-LSTM classifier)
 - coffeine + pyriemann (Riemannian covariance classifiers)
 - pylossless (alternative lossless cleaning pipeline)
 

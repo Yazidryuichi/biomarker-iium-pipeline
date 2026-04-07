@@ -2,8 +2,8 @@
 # ================================================
 
 paths:
-  edf_dir: "./data/EDF_Files"
-  behavioral_dir: "./data"
+  edf_dir: "../EF_Biomarker/EDF_Files"
+  behavioral_dir: ".."
   output_dir: "./results"
   figures_dir: "./figures"
 
@@ -75,9 +75,17 @@ ml:
   random_state: 42
   test_size: 0.2
   models:
-    - LogisticRegression
     - RandomForest
     - XGBoost
+    - LightGBM
+    - CatBoost
     - SVM
-    - Riemannian_MDM
-  scoring: "balanced_accuracy"
+    - KNN
+    - MLP
+    - CNN-LSTM
+  scoring:
+    - balanced_accuracy
+    - f1
+    - roc_auc
+    - sensitivity
+    - specificity

@@ -4,6 +4,7 @@ pywavelets
 scikit-learn
 xgboost
 lightgbm
+catboost
 shap
 pandas
 openpyxl
@@ -15,3 +16,4 @@ matplotlib
 seaborn
 coffeine
 pyriemann
+# Optional: torch (for CNN-LSTM classifier)
