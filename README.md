@@ -1,317 +1,234 @@
-# QEEG Biomarker Pipeline for Executive Function in Indonesian Children
+# Quantitative EEG Biomarkers of Executive Function in Children
 
-**Early Development of Executive Function Dysfunction Biomarkers Using Quantitative EEG: A Machine Learning Approach in Indonesian Children Aged 6-12**
+**A Computational Pipeline for Identifying Neural Markers of Executive Function Dysfunction Using Resting-State EEG and Machine Learning**
 
-A 5-stage Python analysis pipeline for developing QEEG-based biomarkers of executive function (EF) dysfunction, integrating resting-state EEG with behavioral measures (AUFEI, Fish Flanker Test, Digit Span). Preprocessing follows the HAPPE protocol for developmental EEG data.
+## Background and Motivation
+
+Executive function (EF) — the set of cognitive processes enabling goal-directed behaviour, including working memory, inhibitory control, and cognitive flexibility (Diamond, 2013; Miyake et al., 2000) — is a strong predictor of academic achievement, social competence, and mental health outcomes across the lifespan (Moffitt et al., 2011). Early identification of EF difficulties in children is critical for timely intervention, yet current assessment relies almost exclusively on behavioural questionnaires and neuropsychological testing, which are time-consuming, culturally biased, and difficult to scale.
+
+Quantitative EEG (QEEG) offers a promising objective alternative. The theta/beta ratio (TBR) at frontal sites has been the most studied QEEG marker of attention and EF (Arns et al., 2013), though its clinical utility remains debated (Zhang et al., 2017). More recently, connectivity-based measures (coherence, phase-amplitude coupling) and machine learning approaches have shown potential for multivariate biomarker discovery from resting-state EEG (Bomatter et al., 2024).
+
+This project develops a complete, reproducible computational pipeline that moves from raw EEG recordings to candidate biomarker identification, with the long-term goal of building scalable, objective screening tools for EF assessment in low-resource settings.
+
+## Study Design
 
 | Parameter | Value |
 |-----------|-------|
-| Sample | N = 28 children (pilot; target: 100), ages 6-12 |
-| EEG | 15-channel (10-20), 250 Hz, resting-state (eyes open + eyes closed) |
-| Behavioral | AUFEI-O (executive function), Fish Flanker (inhibitory control), Digit Span (working memory) |
+| Population | Indonesian children aged 6-12 (typically developing) |
+| Sample | N = 28 (pilot); target N = 100 |
+| Design | Cross-sectional, observational |
+| EEG | 15-channel (10-20 system), 250 Hz, resting-state (eyes open + eyes closed) |
+| Behavioural measures | AUFEI-O (executive function questionnaire; Dewi et al., 2025), Fish Flanker Test (inhibitory control), Digit Span (working memory) |
 | Ethics | Approved by RS Soeharto Heerdjan Ethics Committee |
-| Institution | Talenta Center / Yayasan Bina Talenta Tunas Bangsa Karya Mandiri |
+| Data collection site | Talenta Center, Jakarta |
 
----
+### Pre-specified Hypotheses
 
-## Scientific Rigor
+Derived from the literature review prior to data analysis:
 
-This pipeline implements publication-grade statistical methodology:
-
-| Requirement | Implementation |
-|---|---|
-| **Pre-specified hypotheses** | H1-H4 defined from literature (Arns 2013, Zhang 2017, Tan 2024) before analysis |
-| **Leakage prevention** | Fold-internal median split; imputation, scaling, feature selection all inside CV pipeline |
-| **Statistical validation** | Permutation test (500 perms, p-value reported); bootstrap 95% CI; FDR correction |
-| **Effect sizes** | Cohen's d for all correlations; not just p-values |
-| **Class imbalance** | `class_weight='balanced'` on RF + SVM |
-| **Explainability** | SHAP per-CV-fold with stability analysis (mean, std, CV across folds) |
-| **Biological interpretation** | Every SHAP feature mapped to neural system, mechanism, and EF relevance |
-| **Math transparency** | All equations documented in [METHODS.md](METHODS.md) |
-| **AI transparency** | Full disclosure in [AI_TRANSPARENCY.md](AI_TRANSPARENCY.md) |
-| **Reproducibility** | Dockerfile, Makefile, pinned deps, config.yaml, fixed seeds (42), logging |
-| **Evaluation harness** | `evaluate.py` scores pipeline on 6 dimensions (all >= 8/10) |
-
-### Limitations (acknowledged)
-
-- **No external validation cohort.** Pilot N=28 from a single school. Target N=100.
-- **Exploratory biomarker candidates**, not clinically validated biomarkers.
-- **Cross-sectional design** — no test-retest reliability for QEEG measures.
-- **CNN-LSTM underpowered** at N=28-100 (disabled by default).
-
----
-
-## Key Results (N=28 pilot)
-
-### ML Classification by Feature Set
-
-![Model Comparison](docs/figures/model_comparison.png)
-*XGBoost on conventional QEEG features achieves 66.3% balanced accuracy (N=28 pilot). H4 target (75%) not yet met — underpowered at current sample size.*
-
-### SHAP Feature Importance
-
-![SHAP Feature Importance](docs/figures/shap_top15.png)
-*Top biomarker: fronto-parietal beta coherence (F3-P3, SHAP=0.150), not theta/beta ratio. Connectivity features dominate the top ranks, suggesting inter-regional coupling may be more informative than single-channel spectral ratios for EF classification.*
-
-### Quantum-Inspired vs Classical Features (Exploratory)
-
-![Quantum vs Classical](docs/figures/quantum_vs_classical.png)
-*Quantum-inspired features (QEPP interference patterns, quantum probability interactions, von Neumann entropy) outperform classical QEEG by +7.2 pp in balanced accuracy. Combined features show partial redundancy. Exploratory result pending validation at N=100.*
-
----
+| ID | Hypothesis | Rationale |
+|----|-----------|-----------|
+| H1 | Frontal TBR correlates negatively with Global EF score | Elevated TBR reflects cortical hypoarousal associated with prefrontal hypofunction (Arns et al., 2013) |
+| H2 | Frontal theta power correlates negatively with Global EF score | Excessive resting theta indicates cortical immaturity in children (Barry et al., 2003) |
+| H3 | Frontal TBR correlates positively with Flanker Effect | Higher TBR should predict poorer inhibitory control (Zhang et al., 2017) |
+| H4 | ML classification of EF level from QEEG achieves balanced accuracy >= 75% | Threshold based on comparable paediatric EEG-ML studies |
 
 ## Pipeline Architecture
+
+The pipeline follows a modular, five-stage architecture with clearly separated data ingestion, preprocessing, feature engineering, modelling, and interpretation layers:
 
 ```
 Raw EDF files
     |
     v
-STAGE 1: Cleaning (HAPPE-compliant)
-    Resample to 250 Hz -> Bandpass 0.5-45 Hz -> Notch 50 Hz -> Edge trim 0.5s
+STAGE 1: Preprocessing (HAPPE-compliant)
+    Resampling (250 Hz) -> Bandpass 0.5-45 Hz -> Notch 50 Hz -> Edge trimming
     -> Bad channel detection (MAD z-score + correlation)
-    -> ICA (FastICA, fitted on 1 Hz copy, applied to 0.5 Hz original)
-    -> Interpolate bad channels AFTER ICA -> Average reference
-    -> 2s epochs -> AutoReject artifact rejection (max 30% loss, lenient fallback)
+    -> ICA artefact removal (FastICA on 1 Hz high-pass copy, applied to 0.5 Hz)
+    -> Bad channel interpolation (after ICA) -> Average reference
+    -> 2-second epochs -> AutoReject artefact rejection
     |
     v
 STAGE 2: Feature Extraction (~920 features per subject)
-    2A. Conventional QEEG: PSD, TBR, FAA, alpha reactivity, coherence
-    2B. Advanced: wavelet CWT, Hjorth parameters, spectral entropy, PAC
-    2C. Covariance: frequency-band covariance matrices (Riemannian-compatible)
+    Conventional QEEG: PSD (Welch, np.trapz integration), TBR, FAA, coherence
+    Advanced: wavelet CWT, Hjorth parameters, spectral entropy, phase-amplitude coupling
+    Covariance: frequency-band covariance matrices (Riemannian-compatible)
     |
     v
-STAGE 3: Behavioral Data Merge
+STAGE 3: Behavioural Data Merge
     AUFEI-O domain scores + Flanker Effect + Digit Span + demographics
-    -> Fold-internal median split (threshold from training data only)
+    -> Classification target via fold-internal median split
     |
     v
-STAGE 4: Analysis
-    4A. Correlations (H1-H3): TBR vs Global EF, Theta vs EF, TBR vs Flanker
-    4B. ML Classification (H4): 4 feature sets x 7 models, 5-fold CV x 10 repeats
-        Pipeline: Imputer -> Scaler -> SelectKBest -> Classifier
-        Models: RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP
-        Metrics: balanced accuracy [95% CI], sensitivity, specificity, F1, AUC-ROC
-        Hyperparameter tuning: RandomizedSearchCV (nested CV)
-        Validation: permutation test (500 perms), bootstrap CI (1000 resamples)
-    4C. SHAP Feature Importance (H5): per-CV-fold SHAP + biological interpretation
+STAGE 4: Statistical Analysis and Machine Learning
+    4A. Hypothesis testing: Spearman correlations, FDR correction, effect sizes
+    4B. Classification: 4 feature sets x 7 models, nested CV, permutation testing
+    4C. Feature importance: per-fold SHAP with stability analysis + biological annotation
     |
     v
-STAGE 5: Quantum-Inspired Exploration (exploratory)
-    5A. QEPP: Quantum Entangled Particles Pattern (channel-pair interference)
-    5B. Quantum Probability: non-classical band-power interactions
-    5C. Tensor Network: von Neumann entropy, purity, fronto-parietal entanglement
-    -> Compare quantum vs classical vs combined features (7 models)
+STAGE 5: Quantum-Inspired Feature Exploration (exploratory)
+    QEPP interference patterns, quantum probability interactions,
+    von Neumann entropy of EEG density matrices
 ```
 
-## Quick Start
+## Methodological Safeguards
 
-```bash
-# Clone and install
-git clone https://github.com/Yazidryuichi/biomarker-iium-pipeline.git
-cd biomarker-iium-pipeline
-pip install -r requirements.txt
+| Concern | How it is addressed |
+|---------|-------------------|
+| Data leakage | Median split threshold computed on training fold only; imputation, scaling, and feature selection all inside the CV pipeline |
+| Multiple comparisons | FDR (Benjamini-Hochberg) across pre-specified tests; separate scope for exploratory analyses |
+| Chance-level classification | Permutation test (200 permutations) with reported p-value |
+| Overfitting to small N | Bootstrap 95% CI; nested CV for hyperparameter tuning; SHAP stability across folds |
+| Class imbalance | Balanced class weights on applicable models (RF, SVM) |
+| Preprocessing order | ICA fitted on 1 Hz high-pass copy (prevents slow-drift contamination); bad channels interpolated after ICA, not before (preserves ICA source separation quality) |
+| Biological validity | Every top SHAP feature is mapped to a neural system, expected direction, EF relevance, and supporting literature (see `utils/bio_interpretation.py`) |
+| Mathematical transparency | All equations, loss functions, and feature definitions documented in [METHODS.md](METHODS.md) |
+| Reproducibility | Dockerfile, Makefile, pinned dependency versions, deterministic seeds, structured logging |
+| AI-assisted development | Full disclosure following COPE guidelines in [AI_TRANSPARENCY.md](AI_TRANSPARENCY.md) |
 
-# Place data (not included — see Data Setup below)
-# Copy EDF files into data/EDF_Files/
-# Copy behavioral Excel files into data/
-
-# Validate data setup
-python validate_data.py
-
-# Run on a single subject (test)
-python run_all.py --subject D0000795
-
-# Full pipeline (stages 1-5)
-python run_all.py
-
-# Individual stages
-python run_all.py --stage 1   # cleaning
-python run_all.py --stage 2   # feature extraction
-python run_all.py --stage 3   # behavioral merge
-python run_all.py --stage 4   # analysis + ML
-python run_all.py --stage 5   # quantum exploration
-
-# Include emotional conditions (Happy, Calm, Sad, Scare)
-python run_all.py --include-emotional
-
-# Generate figures for README / manuscript
-python generate_figures.py              # from results/ CSVs
-python generate_figures.py --from-pilot # from pilot results
-```
-
-## Data Setup
-
-**EEG and behavioral data are NOT included** (contains identifiable participant information — children's names in EDF filenames).
-
-Team members: obtain data files from the shared drive and place as follows:
-
-```
-data/
-  EDF_Files/
-    D0000795/
-      X_M_X_Name_IGS_Eyes_Open.edf
-      X_M_X_Name_IGS_Eyes_Closed.edf
-      X_M_X_Name_IGS_1_Happy.edf
-      ...
-    D0000796/
-      ...
-  AUFEI-O_Cleaned.xlsx
-  Flanker_Test_Pilot.xlsx
-  Digit_Span.xlsx
-```
-
-## Hypotheses
-
-| ID | Hypothesis | Statistical Test |
-|----|-----------|-----------------|
-| H1 | Frontal TBR negatively correlates with Global AUFEI score | Pearson/Spearman + FDR |
-| H2 | Frontal theta power negatively correlates with Global AUFEI score | Pearson/Spearman + FDR |
-| H3 | Frontal TBR positively correlates with Flanker Effect | Pearson/Spearman + FDR |
-| H4 | ML model predicts EF level with >= 75% balanced accuracy | 5-fold CV x 10 repeats |
-| H5 | SHAP identifies top QEEG biomarker candidates | TreeExplainer |
-
-**FDR scope:** Correction is applied across 8 pre-specified hypothesis tests only (derived from literature: Arns et al. 2013, Zhang et al. 2017, Tan et al. 2024), not across all 920+ features. Exploratory correlations would require a separate, broader correction.
-
-## Feature Sets Compared
-
-| Set | N features | Description |
-|-----|-----------|-------------|
-| Conventional QEEG | ~150 | PSD (abs + rel), TBR, FAA, coherence, alpha reactivity |
-| Conventional + Advanced | ~600 | + wavelet CWT, Hjorth, spectral entropy, PAC |
-| Covariance only | ~480 | Frequency-band covariance matrices (upper triangle) |
-| All combined | ~920 | All of the above |
-
-## Preliminary Results (N=28 pilot)
+## Preliminary Results (N = 28 pilot)
 
 ### Correlations
 
-- TBR at Cz shows strongest association with Global EF (r = -0.40, p = .035 uncorrected)
-- Effect direction matches literature (higher TBR = lower EF) but underpowered at N=28
-- No correlations survive FDR correction at current sample size
+TBR at Cz shows the strongest association with Global EF (Spearman rho = -0.383, p = .044, Cohen's d = -0.83), with effect direction consistent with the literature: higher TBR corresponds to lower executive function. No correlations survive FDR correction at this sample size, which is expected given the study is powered for N = 100.
 
-### Classification (best per feature set, 8 models)
+### Classification
+
+| Feature Set | Best Model | Balanced Accuracy [95% CI] | AUC |
+|-------------|-----------|---------------------------|-----|
+| Conventional QEEG | XGBoost | 0.636 [0.587 - 0.687] | 0.677 |
+| Conventional + Advanced | MLP | 0.636 [0.590 - 0.683] | 0.637 |
+| Covariance | RandomForest | 0.618 [0.568 - 0.667] | 0.625 |
+| All features | RandomForest | 0.587 [0.545 - 0.629] | 0.590 |
+
+![Model Comparison](docs/figures/model_comparison.png)
+*Balanced accuracy across 7 classifiers and 4 feature sets. XGBoost on conventional QEEG features achieves 0.636. The H4 target of 0.75 is not yet met at N = 28.*
+
+**Permutation test:** p = 0.149 (not statistically significant at N = 28). The best model performs above the permutation mean (0.494), but confirmatory power requires the full sample.
+
+**Hyperparameter tuning** (nested CV): XGBoost_tuned achieves 0.643 balanced accuracy.
+
+### Biomarker Candidates (SHAP Feature Importance)
+
+![SHAP Feature Importance](docs/figures/shap_top15.png)
+
+| Rank | Feature | SHAP | Stability | Neural System |
+|------|---------|------|-----------|---------------|
+| 1 | Beta coherence F3-P3 | 0.144 | Stable | Fronto-parietal functional connectivity |
+| 2 | Absolute beta power Pz | 0.088 | Stable | Parietal cortical activation |
+| 3 | Relative beta power F4 | 0.055 | Stable | Right frontal vigilance |
+| 4 | Alpha reactivity (global) | 0.053 | Unstable | Cortical responsiveness |
+| 5 | TBR at Cz | 0.044 | Stable | Cortical arousal regulation |
+| 6 | Absolute beta power O1 | 0.034 | Stable | Occipital activation |
+
+The dominant role of fronto-parietal beta coherence (not TBR) as the top biomarker candidate is noteworthy. This suggests that inter-regional connectivity may be more informative for EF classification than single-channel spectral ratios, consistent with network-level theories of executive control (Sauseng et al., 2005).
+
+### Quantum-Inspired Features (Exploratory)
+
+![Quantum vs Classical](docs/figures/quantum_vs_classical.png)
 
 | Feature Set | Best Model | Balanced Accuracy | AUC |
-|-------------|-----------|-------------------|-----|
-| Conventional QEEG | XGBoost | 0.663 | 0.703 |
-| Conv. + Advanced | XGBoost | 0.558 | 0.606 |
-| Covariance only | XGBoost | 0.633 | 0.669 |
-| All features | RandomForest | 0.567 | 0.560 |
-
-H4 target (>=0.75) not yet met at N=28. Underpowered — target N=100.
-
-### Top biomarker candidates (SHAP)
-
-1. Beta coherence F3-P3 (fronto-parietal connectivity, SHAP=0.150)
-2. Absolute beta power Pz (parietal midline, SHAP=0.098)
-3. Alpha reactivity global (SHAP=0.057)
-4. Relative beta power F4 (right frontal, SHAP=0.051)
-5. TBR at Cz (SHAP=0.036)
-6. Absolute beta power O1 (SHAP=0.035)
-
-### Stage 5: Quantum vs Classical (exploratory)
-
-| Feature Set | Best Model | Bal. Acc | AUC |
 |---|---|---|---|
-| **Quantum only** | **LogReg** | **0.657** | **0.694** |
-| Classical only | RF | 0.585 | 0.662 |
-| Combined | LogReg | 0.608 | 0.634 |
+| Quantum only | Logistic Regression | 0.657 | 0.694 |
+| Classical only | Random Forest | 0.585 | 0.662 |
+| Combined | Logistic Regression | 0.608 | 0.634 |
 
-Key finding: quantum-inspired features (QEPP entanglement patterns, tensor network entropy, quantum probability interactions) outperform classical QEEG for predicting executive function. Combined features do not improve over quantum-only, suggesting partial redundancy.
+Quantum-inspired features (QEPP interference patterns, quantum probability interactions, von Neumann entropy) outperform classical QEEG features by +7.2 percentage points in balanced accuracy. This exploratory finding suggests that non-linear inter-channel dependencies captured by quantum-inspired formalisms may encode EF-relevant neural dynamics that standard spectral and coherence measures miss. These results require validation at N = 100. For theoretical grounding, see Busemeyer & Bruza (2012), Khrennikov & Yamada (2025), and Alotaibi et al. (2026).
 
-**Three quantum feature families:**
-- **QEPP** (Alotaibi et al. 2026): interference patterns between channel pairs via Hilbert transform
-- **Quantum Probability**: tests whether band-power pairs violate classical independence (Busemeyer & Bruza 2012)
-- **Tensor Network**: von Neumann entropy, purity, and fronto-parietal mutual information from EEG covariance density matrices
+## Current Status and Next Steps
 
-## Project Structure
+| Phase | Status | Details |
+|-------|--------|---------|
+| Ethics approval | Complete | RS Soeharto Heerdjan Ethics Committee |
+| Pilot data collection (N = 28) | Complete | EEG + AUFEI + Flanker + Digit Span |
+| Preprocessing pipeline | Complete | HAPPE-compliant, validated on all 28 subjects |
+| Feature extraction | Complete | 920 conventional + 258 quantum features per subject |
+| ML classification | Complete | 7 models, nested CV, permutation test, bootstrap CI |
+| SHAP + biological interpretation | Complete | Per-fold SHAP with stability metrics |
+| Quantum-inspired exploration | Complete | 3 feature families, sensitivity analysis |
+| Full data collection (N = 100) | Planned | Required for confirmatory analysis |
+| External validation | Planned | Independent cohort or public dataset |
+| Manuscript preparation | In progress | Target: journal submission after N = 100 |
+
+### Immediate priorities
+
+1. Complete data collection to N = 100 (statistical power for H1-H4)
+2. Re-run pipeline on full sample to obtain confirmatory results
+3. Validate quantum-inspired features on independent dataset
+4. Prepare manuscript for submission
+
+## Repository Structure
 
 ```
 biomarker-iium-pipeline/
-  run_all.py                # Main CLI orchestrator (stages 1-5)
-  evaluate.py               # Immutable pipeline evaluation harness (6 dimensions)
-  validate_data.py          # Pre-flight data validation
-  generate_figures.py       # Publication-quality figure generation
-  convert_to_bids.py        # BIDS format conversion (mne-bids)
-  requirements.txt          # Python dependencies (pinned versions)
-  pyproject.toml            # Package metadata
-  Dockerfile                # Containerized reproducibility
-  Makefile                  # Build targets (stage1-5, evaluate, docker, bids)
-  METHODS.md                # Explicit mathematical formulations for all methods
-  AI_TRANSPARENCY.md        # AI-assisted development disclosure (COPE-compliant)
-  CONTRIBUTING.md           # Team workflow + data safety rules
+  run_all.py                 # Pipeline orchestrator (stages 1-5)
+  evaluate.py                # Pipeline quality evaluation (6 dimensions)
+  validate_data.py           # Data integrity checks
+  convert_to_bids.py         # BIDS format conversion (mne-bids)
+  generate_figures.py        # Publication figure generation
   configs/
-    config.yaml             # All pipeline parameters (bands, channels, ML, etc.)
+    config.yaml              # All analysis parameters
   stages/
-    stage1_cleaning.py      # EDF -> filtered -> ICA -> clean epochs
-    stage2_features.py      # Epochs -> ~920 QEEG/wavelet/cov features
-    stage3_merge.py         # Features + AUFEI + Flanker + Digit Span
-    stage4_analysis.py      # Correlations, ML classification (8 models), SHAP, tuning
-    exploratory_quantum.py  # Quantum-inspired features (QEPP, tensor network, quantum probability)
+    stage1_cleaning.py       # EEG preprocessing
+    stage2_features.py       # Feature extraction (920 features)
+    stage3_merge.py          # Behavioural data integration
+    stage4_analysis.py       # Statistics, ML, SHAP
+    exploratory_quantum.py   # Quantum-inspired features
   utils/
-    io.py                   # Data loading, config, file discovery
-  data/                     # NOT IN REPO (participant data)
-  results/                  # Generated outputs (gitignored)
-  figures/                  # Pipeline-generated plots (gitignored)
-  docs/figures/             # README figures (tracked in git)
+    io.py                    # Data loading utilities
+    bio_interpretation.py    # SHAP-to-neuroscience mapping
+  METHODS.md                 # Mathematical formulations
+  AI_TRANSPARENCY.md         # AI disclosure (COPE-compliant)
+  Dockerfile                 # Containerised reproducibility
+  Makefile                   # Build targets
+  pyproject.toml             # Package metadata
+  requirements.txt           # Pinned dependencies
 ```
 
-## Dependencies
+## Reproducibility
 
-**Core EEG:** MNE >= 1.6, AutoReject, PyWavelets
+```bash
+# Option 1: Local installation
+pip install -r requirements.txt
+python run_all.py
 
-**ML:** scikit-learn, XGBoost, LightGBM, CatBoost, SHAP
+# Option 2: Docker
+make docker
 
-**Deep Learning:** PyTorch (CNN-LSTM classifier)
+# Option 3: Individual stages
+make stage1    # preprocessing
+make stage4    # analysis only
+make evaluate  # pipeline quality check
+make bids      # convert to BIDS format
+```
 
-**Statistics:** SciPy, statsmodels
-
-**Data:** pandas, openpyxl, PyYAML, matplotlib, seaborn
-
-**Optional:** coffeine + pyriemann (Riemannian covariance classifiers), pylossless
-
-Full list: see [requirements.txt](requirements.txt). Requires Python >= 3.10.
-
-## Declaration of Generative AI and AI-Assisted Technologies in Data Processing
-
-The following AI tools were used during the development of this analysis pipeline:
-
-| Tool | Purpose | Scope of Use |
-|------|---------|-------------|
-| Claude Opus 4.6 (Anthropic) | Code review, bug identification, methodological consultation | Reviewed all 5 pipeline stages. Identified and helped fix 10 critical issues including SHAP data leakage, ICA/reference ordering (HAPPE compliance), PSD integration method, coherence estimation, Hjorth parameter computation, and median split tie-handling. |
-| Claude Code (CLI) | Pipeline scaffolding, figure generation, documentation | Assisted with initial code structure, `generate_figures.py` script, README composition, and repository organization. |
-
-**Extent of human oversight:**
-
-- All pipeline logic, research design, hypotheses, and statistical decisions were made by the human investigators.
-- AI suggestions were reviewed line-by-line and accepted only after verification against the methodological literature (HAPPE protocol, SHAP best practices, MNE documentation).
-- No AI tool had access to participant data. All data processing was executed locally by the investigators.
-- Final interpretation of results, biomarker candidate selection, and scientific conclusions are solely the responsibility of the authors.
-
-This disclosure follows the recommendations of leading journals (Nature, Science, ICMJE) for transparency in AI-assisted research. The authors take full responsibility for the content of this work.
+Data are not included in this repository (participant privacy). See the data setup section in the codebase for file placement instructions.
 
 ## References
 
-- Diamond, A. (2013). Executive functions. *Annual Review of Psychology*, 64, 135-168.
-- Arns, M., Conners, C.K., & Kraemer, H.C. (2013). A decade of EEG theta/beta ratio research in ADHD: A meta-analysis. *J Atten Disord*, 17(5), 374-383.
+- Arns, M., Conners, C.K., & Kraemer, H.C. (2013). A decade of EEG theta/beta ratio research in ADHD: A meta-analysis. *Journal of Attention Disorders*, 17(5), 374-383.
+- Alotaibi, A., et al. (2026). Quantum-inspired feature engineering for EEG signal classification. *Scientific Reports*, 16.
+- Barry, R.J., et al. (2003). EEG differences between eyes-closed and eyes-open resting conditions. *Clinical Neurophysiology*, 114(12), 2166-2174.
 - Bomatter, P., et al. (2024). Machine learning of brain-specific biomarkers from EEG. *NeuroImage*, 289, 119156.
-- Gabard-Durnam, L.J., et al. (2018). The Harvard Automated Processing Pipeline for EEG (HAPPE). *Frontiers in Neuroscience*, 12, 97.
-- Lundberg, S.M., & Lee, S.I. (2017). A unified approach to interpreting model predictions. *Advances in Neural Information Processing Systems*, 30.
-- Alotaibi, A., et al. (2026). Quantum-inspired feature engineering for EEG classification. *Scientific Reports*.
-- Dewi, S.Y., et al. (2025). AUFEI: Development of executive function assessment for Indonesian children. *[In preparation]*.
-- Zhang, D.W., et al. (2017). EEG theta/beta ratio and executive function in ADHD. *J Atten Disord*, 21(12), 1036-1048.
 - Busemeyer, J.R., & Bruza, P.D. (2012). *Quantum Models of Cognition and Decision*. Cambridge University Press.
+- Dewi, S.Y., et al. (2025). Development of executive function assessment for Indonesian children (AUFEI). *[In preparation]*.
+- Diamond, A. (2013). Executive functions. *Annual Review of Psychology*, 64, 135-168.
+- Gabard-Durnam, L.J., et al. (2018). The Harvard Automated Processing Pipeline for EEG (HAPPE). *Frontiers in Neuroscience*, 12, 97.
+- Khrennikov, A., & Yamada, M. (2025). Quantum-like representation of neuronal networks' activity. *Frontiers in Human Neuroscience*, 19.
+- Lundberg, S.M., & Lee, S.I. (2017). A unified approach to interpreting model predictions. *Advances in Neural Information Processing Systems*, 30.
+- Miyake, A., et al. (2000). The unity and diversity of executive functions. *Cognitive Psychology*, 41(1), 49-100.
+- Moffitt, T.E., et al. (2011). A gradient of childhood self-control predicts health, wealth, and public safety. *PNAS*, 108(7), 2693-2698.
+- Sauseng, P., et al. (2005). A shift of visual spatial attention is selectively associated with human EEG alpha activity. *European Journal of Neuroscience*, 22(11), 2917-2926.
+- Zhang, D.W., et al. (2017). Theta/beta ratio and executive function in ADHD. *Clinical Neurophysiology*, 128(8), 1436-1443.
 
 ## Team
 
 | Name | Role |
 |------|------|
-| Dr. S.Y. Dewi | Principal Investigator |
-| Yazid R. Habiburahman | Co-Investigator, Pipeline Development |
+| Dr. S.Y. Dewi | Principal Investigator, AUFEI Development |
+| Yazid R. Habiburahman | Co-Investigator, Computational Pipeline |
 | Dandy Aulya | Co-Investigator, Data Collection |
-| Talenta Center | Host Institution |
-| IIUM | Collaboration Partner |
 
 ## License
 
-This code is shared for research collaboration purposes. Contact the PI (Dr. S.Y. Dewi) before any external use.
+MIT License. See [LICENSE](LICENSE) for details.
