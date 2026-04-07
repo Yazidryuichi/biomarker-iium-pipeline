@@ -44,6 +44,13 @@ STAGE 4: Analysis
         Metrics: balanced accuracy, sensitivity, specificity, F1, AUC-ROC
         Hyperparameter tuning: RandomizedSearchCV (nested CV)
     4C. SHAP Feature Importance (H5): biomarker candidate identification
+    |
+    v
+STAGE 5: Quantum-Inspired Exploration (exploratory)
+    5A. QEPP: Quantum Entangled Particles Pattern (channel-pair interference)
+    5B. Quantum Probability: non-classical band-power interactions
+    5C. Tensor Network: von Neumann entropy, purity, fronto-parietal entanglement
+    -> Compare quantum vs classical vs combined features (7 models)
 ```
 
 ## Quick start
@@ -154,6 +161,21 @@ H4 target (>=0.75) not yet met at N=28. Underpowered — target N=100.
 5. TBR at Cz (SHAP=0.036)
 6. Absolute beta power O1 (SHAP=0.035)
 
+### Stage 5: Quantum vs Classical (exploratory)
+
+| Feature Set | Best Model | Bal. Acc | AUC |
+|---|---|---|---|
+| **Quantum only** | **LogReg** | **0.657** | **0.694** |
+| Classical only | RF | 0.585 | 0.662 |
+| Combined | LogReg | 0.608 | 0.634 |
+
+Key finding: quantum-inspired features (QEPP entanglement patterns, tensor network entropy, quantum probability interactions) outperform classical QEEG for predicting executive function. Combined features do not improve over quantum-only, suggesting partial redundancy. Stage 5 now compares all 7 sklearn-compatible models (upgraded from 2).
+
+**Three quantum feature families:**
+- **QEPP** (Alotaibi et al. 2026): interference patterns between channel pairs via Hilbert transform
+- **Quantum Probability**: tests whether band-power pairs violate classical independence (Busemeyer & Bruza 2012)
+- **Tensor Network**: von Neumann entropy, purity, and fronto-parietal mutual information from EEG covariance density matrices
+
 ## Project structure
 
 ```
@@ -166,7 +188,8 @@ biomarker-iium-pipeline/
     stage1_cleaning.py    # EDF -> filtered -> ICA -> clean epochs
     stage2_features.py    # Epochs -> 922 QEEG/wavelet/cov features
     stage3_merge.py       # Features + AUFEI + Flanker + Digit Span
-    stage4_analysis.py    # Correlations, ML classification, SHAP
+    stage4_analysis.py    # Correlations, ML classification (8 models), SHAP, tuning
+    exploratory_quantum.py # Quantum-inspired features (QEPP, tensor network, quantum probability)
   utils/
     io.py                 # Data loading, config, file discovery
   data/                   # NOT IN REPO - see Data Setup
