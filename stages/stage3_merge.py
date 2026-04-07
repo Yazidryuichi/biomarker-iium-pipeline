@@ -21,10 +21,18 @@ def compute_age(dob_series, assessment_date="2026-03-09"):
 def create_ef_groups(scores, method="median"):
     """
     Split subjects into high/low EF groups for classification.
+    Uses strict > for ties (ties go to low group) to prevent
+    class imbalance with integer-scale questionnaire scores.
     """
     if method == "median":
         threshold = scores.median()
-        return (scores >= threshold).astype(int)
+        groups = (scores > threshold).astype(int)
+        # Check balance — warn if worse than 40/60
+        balance = groups.mean()
+        if balance < 0.35 or balance > 0.65:
+            print(f"    WARNING: Class imbalance {1-balance:.0%}/{balance:.0%}. "
+                  f"Consider tertile split.")
+        return groups
     elif method == "tertile":
         low_t = scores.quantile(0.33)
         high_t = scores.quantile(0.67)

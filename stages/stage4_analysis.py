@@ -55,10 +55,17 @@ def run_descriptives(df, config):
 
 def run_correlations(df, config):
     """
-    Test hypotheses H1-H3:
+    Test hypotheses H1-H3 (pre-specified, not data-driven):
       H1: negative correlation TBR_frontal ↔ Global_EF
       H2: negative correlation theta_frontal ↔ Global_EF
       H3: positive correlation TBR_frontal ↔ Flanker_Effect
+
+    NOTE on FDR scope: correction is applied across these 8 pre-specified
+    tests only, not across all 200+ feature-outcome pairs. These hypotheses
+    were derived from the literature review (Arns et al. 2013, Zhang et al.
+    2017, Tan et al. 2024) prior to data analysis. Exploratory correlations
+    across all features would require a separate, broader FDR correction
+    and should be reported as exploratory in any publication.
     """
     print("\n" + "-" * 40)
     print("4A. Hypothesis Testing (Correlations)")
@@ -312,13 +319,26 @@ def run_shap_analysis(df, config, best_feature_set="conventional_qeeg"):
 
     X = df.loc[valid_idx, fs_cols].fillna(0)
 
-    # Select top features
+    # CV-stable feature selection: run SelectKBest inside CV folds,
+    # keep features selected in >= 3/5 folds. Avoids data leakage
+    # from fitting selector on full dataset.
     n_select = min(10, len(fs_cols))
-    selector = SelectKBest(f_classif, k=n_select)
-    X_selected = selector.fit_transform(X, y)
-    selected_names = [fs_cols[i] for i in selector.get_support(indices=True)]
+    from sklearn.model_selection import StratifiedKFold
 
-    # Fit model on all data for SHAP (not for prediction — for interpretation)
+    cv_inner = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    feature_votes = np.zeros(len(fs_cols))
+    for train_idx, _ in cv_inner.split(X, y):
+        sel = SelectKBest(f_classif, k=n_select)
+        sel.fit(X.iloc[train_idx], y.iloc[train_idx])
+        feature_votes[sel.get_support()] += 1
+
+    stable_mask = feature_votes >= 3
+    if stable_mask.sum() == 0:
+        stable_mask = feature_votes >= 2  # fallback if too strict
+    selected_names = [fs_cols[i] for i, m in enumerate(stable_mask) if m]
+    X_selected = X[selected_names].values
+
+    # Fit model for SHAP interpretation (not for prediction claims)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_selected)
 

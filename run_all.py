@@ -40,7 +40,12 @@ from stages.stage1_cleaning import run_stage1
 from stages.stage2_features import run_stage2
 from stages.stage3_merge import run_stage3
 from stages.stage4_analysis import run_stage4
-from stages.exploratory_quantum import run_quantum_exploration
+
+try:
+    from stages.exploratory_quantum import run_quantum_exploration
+    HAS_QUANTUM = True
+except ImportError:
+    HAS_QUANTUM = False
 
 
 def main():
@@ -130,7 +135,7 @@ def main():
         results = run_stage4(config, full_df)
 
     # ── Stage 5: Quantum-Inspired Exploration ──
-    if args.stage is None or args.stage == 5:
+    if (args.stage is None or args.stage == 5) and HAS_QUANTUM:
         if args.stage == 5:
             all_epochs = load_cleaned_epochs(config)
             import pandas as pd

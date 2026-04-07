@@ -46,12 +46,12 @@ def extract_psd_features(epochs, bands, method="welch"):
     # Average across epochs
     mean_psd = np.mean(psd_data, axis=0)  # (n_channels, n_freqs)
 
-    # Total power for relative calculation
-    total_power = np.sum(mean_psd, axis=1)  # (n_channels,)
+    # Total power via numerical integration (V², resolution-independent)
+    total_power = np.trapz(mean_psd, freqs, axis=1)  # (n_channels,)
 
     for band_name, (fmin, fmax) in bands.items():
         freq_mask = (freqs >= fmin) & (freqs < fmax)
-        band_power = np.sum(mean_psd[:, freq_mask], axis=1)
+        band_power = np.trapz(mean_psd[:, freq_mask], freqs[freq_mask], axis=1)
 
         for i, ch in enumerate(ch_names):
             features[f"psd_abs_{band_name}_{ch}"] = band_power[i]
@@ -79,8 +79,8 @@ def extract_tbr(epochs, bands, tbr_channels):
         if ch not in ch_names:
             continue
         idx = ch_names.index(ch)
-        theta_power = np.sum(psd_data[idx, theta_mask])
-        beta_power = np.sum(psd_data[idx, beta_mask])
+        theta_power = np.trapz(psd_data[idx, theta_mask], freqs[theta_mask])
+        beta_power = np.trapz(psd_data[idx, beta_mask], freqs[beta_mask])
         tbr = theta_power / beta_power if beta_power > 0 else np.nan
         features[f"tbr_{ch}"] = tbr
 
@@ -173,16 +173,16 @@ def extract_coherence(epochs, coherence_pairs, bands):
         idx1 = ch_names.index(ch1)
         idx2 = ch_names.index(ch2)
 
-        # Average coherence across epochs
-        cohs = []
-        for epoch in data:
-            f, coh = sig.coherence(
-                epoch[idx1], epoch[idx2],
-                fs=sfreq, nperseg=int(sfreq * 1.0),
-                noverlap=int(sfreq * 0.5),
-            )
-            cohs.append(coh)
-        mean_coh = np.mean(cohs, axis=0)
+        # Concatenate all epochs for more robust coherence estimation
+        # (per-epoch with 2s segments gives only 3 sub-segments — unreliable)
+        concat_ch1 = data[:, idx1, :].ravel()
+        concat_ch2 = data[:, idx2, :].ravel()
+
+        f, mean_coh = sig.coherence(
+            concat_ch1, concat_ch2,
+            fs=sfreq, nperseg=int(sfreq * 2.0),
+            noverlap=int(sfreq * 1.0),
+        )
 
         for band_name, (fmin, fmax) in bands.items():
             mask = (f >= fmin) & (f < fmax)
@@ -252,26 +252,31 @@ def extract_wavelet_features(epochs, config):
 def extract_hjorth(epochs):
     """
     Hjorth parameters: Activity, Mobility, Complexity per channel.
+    Computed per-epoch then averaged (not on epoch-averaged signal,
+    which would destroy temporal structure in resting-state data).
     """
-    data = epochs.get_data()
-    mean_data = np.mean(data, axis=0)  # average across epochs
+    data = epochs.get_data()  # (n_epochs, n_channels, n_times)
     ch_names = epochs.ch_names
     features = {}
 
     for i, ch in enumerate(ch_names):
-        x = mean_data[i]
-        dx = np.diff(x)
-        ddx = np.diff(dx)
+        activities, mobilities, complexities = [], [], []
+        for ep in range(data.shape[0]):
+            x = data[ep, i]
+            dx = np.diff(x)
+            ddx = np.diff(dx)
 
-        activity = np.var(x)
-        mobility = np.sqrt(np.var(dx) / (activity + 1e-10))
-        complexity = (
-            np.sqrt(np.var(ddx) / (np.var(dx) + 1e-10)) / (mobility + 1e-10)
-        )
+            act = np.var(x)
+            mob = np.sqrt(np.var(dx) / (act + 1e-10))
+            comp = np.sqrt(np.var(ddx) / (np.var(dx) + 1e-10)) / (mob + 1e-10)
 
-        features[f"hjorth_activity_{ch}"] = activity
-        features[f"hjorth_mobility_{ch}"] = mobility
-        features[f"hjorth_complexity_{ch}"] = complexity
+            activities.append(act)
+            mobilities.append(mob)
+            complexities.append(comp)
+
+        features[f"hjorth_activity_{ch}"] = np.mean(activities)
+        features[f"hjorth_mobility_{ch}"] = np.mean(mobilities)
+        features[f"hjorth_complexity_{ch}"] = np.mean(complexities)
 
     return features
 

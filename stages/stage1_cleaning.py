@@ -65,7 +65,8 @@ def apply_filters(raw, config):
 
     notch = config["cleaning"]["notch"]
     if notch:
-        raw.notch_filter(freqs=notch, verbose=False)
+        notch_freqs = [notch] if isinstance(notch, (int, float)) else notch
+        raw.notch_filter(freqs=notch_freqs, verbose=False)
 
     return raw
 
@@ -122,26 +123,29 @@ def run_ica(raw, config):
     )
     ica.fit(raw, verbose=False)
 
-    # Auto-detect EOG components using Fp1/Fp2
-    eog_indices = []
+    # Auto-detect EOG components using Fp1/Fp2, tracking scores
+    scored_components = []
     for eog_ch in ["Fp1", "Fp2"]:
         if eog_ch in raw.ch_names:
             try:
                 idx, scores = ica.find_bads_eog(
                     raw, ch_name=eog_ch, verbose=False
                 )
-                eog_indices.extend(idx)
+                for i in idx:
+                    scored_components.append((i, abs(scores[i])))
             except Exception:
                 pass
 
-    # Remove duplicates
-    eog_indices = list(set(eog_indices))
+    # Deduplicate, keeping highest score per component
+    best_scores = {}
+    for comp_idx, score in scored_components:
+        if comp_idx not in best_scores or score > best_scores[comp_idx]:
+            best_scores[comp_idx] = score
 
-    # Cap removals: never remove more than 3 components
-    # (conservative for 15-channel data)
-    if len(eog_indices) > 3:
-        # Keep only the ones with highest correlation to Fp channels
-        eog_indices = eog_indices[:3]
+    # Sort by score descending, cap at 3 (conservative for 15-channel)
+    eog_indices = [
+        idx for idx, _ in sorted(best_scores.items(), key=lambda x: x[1], reverse=True)
+    ][:3]
 
     ica.exclude = eog_indices
 
@@ -241,11 +245,12 @@ def clean_single_file(filepath, config, subject_id, condition):
         raw.info["bads"] = bad_channels
         raw.interpolate_bads(verbose=False)
 
-    # Re-reference to average
-    raw.set_eeg_reference("average", verbose=False)
-
-    # ICA
+    # ICA before average reference (HAPPE protocol: ICA on non-averaged data,
+    # then re-reference after component removal)
     raw_clean, ica, excluded_ics = run_ica(raw, config)
+
+    # Re-reference to average AFTER ICA (avoids reference constraint in ICA)
+    raw_clean.set_eeg_reference("average", verbose=False)
     qc["ica_excluded"] = excluded_ics
     qc["n_ica_excluded"] = len(excluded_ics)
 
