@@ -1,0 +1,54 @@
+# ============================================================
+# CRITICAL: Patient data must NEVER be committed
+# ============================================================
+# EDF files contain children's full names in filenames
+data/*.edf
+data/*.xlsx
+data/*.csv
+data/**/*.edf
+
+# Raw data directories
+EF_Biomarker/
+EDF_Files/
+AUFEI-O/
+Digital_Consent/
+Ethic_Approval_Docs/
+Archives/
+
+# Pipeline outputs (regenerable)
+results/
+figures/
+*.fif
+*.npz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Environment
+.env
+.env.keys

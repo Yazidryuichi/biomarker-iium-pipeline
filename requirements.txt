@@ -1,0 +1,17 @@
+mne>=1.6
+autoreject
+pywavelets
+scikit-learn
+xgboost
+lightgbm
+shap
+pandas
+openpyxl
+pyyaml
+scipy
+statsmodels
+antropy
+matplotlib
+seaborn
+coffeine
+pyriemann
