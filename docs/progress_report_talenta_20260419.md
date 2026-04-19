@@ -206,7 +206,7 @@ In parallel, adding aperiodic 1/f slope features via FOOOF (Akbarian et al., 202
 
 **Replication of the leading biomarker (posterior-parietal beta)** on held-out data. If beta power at Pz, P3, and O1 remains the top predictor in the expanded cohort, its status advances from candidate to pilot-validated biomarker.
 
-### 6.3 Long-Term (PhD scale)
+### 6.3 Long-Term 
 
 **Data-driven network decomposition** via TDE-HMM (Rossi et al., 2023, Communications Biology) to infer frequency-specific networks underlying working memory without a-priori ROI selection. The method directly addresses the limitations of traditional band-power analysis and has been validated on n-back paradigms, which overlap with the Fish Flanker Test.
 
