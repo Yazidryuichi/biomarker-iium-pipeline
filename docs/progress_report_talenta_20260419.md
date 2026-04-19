@@ -18,7 +18,7 @@ The Biomarker_IIUM study has completed the full end-to-end pipeline — from raw
 
 ## 2. Background and Study Aims (Brief)
 
-The study aims to develop candidate executive-dysfunction biomarkers from resting-state QEEG, integrated with locally validated Indonesian behavioural instruments (AUFEI and Fish Flanker Test) using machine learning. The context for urgency is documented in Proposal_QEEG_v4: AUFEI 2025 data (N = 624 adolescents aged 13–24) report that 81.3 percent of Indonesian adolescents have suboptimal executive-function development, with 39.8 percent showing working-memory difficulties and 32.7 percent showing inhibitory-control difficulties. Reported ADHD prevalence in Indonesia varies widely — from 5.47 percent in Yogyakarta to 15.1 percent in Surabaya. To date, only one EEG study on Indonesian children has been published (Arns et al., 2022, N = 9, neurofeedback feasibility), so no QEEG normative reference exists for this population. Biomarker_IIUM fills that gap, with the pilot N = 28 designed to scale to the proposal's full-cohort target of N = 100.
+The study aims to develop candidate executive-dysfunction biomarkers from resting-state QEEG, integrated with locally validated Indonesian behavioural instruments (AUFEI and Fish Flanker Test) using machine learning. The context for urgency is documented in Proposal_QEEG_v4: AUFEI 2025 data (N = 624 adolescents aged 13–24) report that 81.3 percent of Indonesian adolescents have suboptimal executive-function development, with 39.8 percent showing working-memory difficulties and 32.7 percent showing inhibitory-control difficulties. Reported ADHD prevalence in Indonesia varies widely — from 5.47 percent in Yogyakarta to 15.1 percent in Surabaya. To date, only one EEG study on Indonesian children has been published (Subandriyo et al., 2021, N = 9 enrolled / 8 completed, neurofeedback feasibility in *Kobe J Med Sci*), so no QEEG normative reference exists for this population. Biomarker_IIUM fills that gap, with the pilot N = 28 designed to scale to the proposal's full-cohort target of N = 100.
 
 The five research questions from the proposal are:
 
@@ -257,13 +257,15 @@ Biomarker_IIUM/
 
 Akbarian, F., Rossi, C., Costers, L., et al. (2023). The spectral slope as a marker of excitation/inhibition ratio and cognitive functioning in multiple sclerosis. *bioRxiv*. https://doi.org/10.1101/2023.01.23.525139
 
-Arns, M., Conners, C. K., & Kraemer, H. C. (2013). A decade of EEG theta/beta ratio research in ADHD: A meta-analysis. *Journal of Attention Disorders*, 17(5), 374–383.
+Arns, M., Conners, C. K., & Kraemer, H. C. (2013). A decade of EEG theta/beta ratio research in ADHD: A meta-analysis. *Journal of Attention Disorders*, 17(5), 374–383. https://doi.org/10.1177/1087054712460087
 
-Dewi, S. Y., et al. (2025). Alat Ukur Fungsi Eksekutif Indonesia (AUFEI) — validation and norming. *International Journal of Neuropsychopharmacology*.
+Dewi, S. Y., et al. (2025). Alat Ukur Fungsi Eksekutif Indonesia (AUFEI) — validation and norming. PDSKJI research output (venue to be confirmed with corresponding author; note: not indexed in *International Journal of Neuropsychopharmacology* as previously assumed).
 
-Gabard-Durnam, L. J., Leal, A. S. M., Wilkinson, C. L., & Levin, A. R. (2018). The Harvard Automated Processing Pipeline for Electroencephalography (HAPPE). *Frontiers in Neuroscience*, 12, 97.
+Gabard-Durnam, L. J., Mendez Leal, A. S., Wilkinson, C. L., & Levin, A. R. (2018). The Harvard Automated Processing Pipeline for Electroencephalography (HAPPE): Standardized Processing Software for Developmental and High-Artifact Data. *Frontiers in Neuroscience*, 12, 97. https://doi.org/10.3389/fnins.2018.00097
 
-Miyake, A., Friedman, N. P., Emerson, M. J., et al. (2000). The unity and diversity of executive functions. *Cognitive Psychology*, 41(1), 49–100.
+Miyake, A., Friedman, N. P., Emerson, M. J., et al. (2000). The unity and diversity of executive functions. *Cognitive Psychology*, 41(1), 49–100. https://doi.org/10.1006/cogp.1999.0734
+
+Subandriyo, A. P. E. P., Jongsma, M. L. A., Wijaya, D. A., Trisnadewi, B. A. P., Paravoti, A., Novihartanti, B. L., Widyorini, E., Sulastri, A., & Breteler, M. H. M. (2021). Offering Neurofeedback as an Intervention for Children with Attention Deficit/Hyperactivity Disorder in Indonesia: A Feasibility Study. *Kobe Journal of Medical Sciences*, 67(4), E125–E136. PMID: 35367999.
 
 Pinggal, E., Jackson, J., Kusztor, A., et al. (2026). Sleep-like slow waves during wakefulness mediate attention and vigilance difficulties in adult ADHD. *Journal of Neuroscience*, 46(15), e1694252025. https://doi.org/10.1523/JNEUROSCI.1694-25.2025
 
