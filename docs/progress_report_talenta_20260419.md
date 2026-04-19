@@ -192,7 +192,7 @@ The study recruits only typical children — no ADHD, autism-spectrum, or specif
 
 Next actions are organised across three time horizons.
 
-### 6.1 Short-Term (before JIPA submission)
+### 6.1 Short-Term 
 
 First priority is completing a pipeline run on Dandy's machine (Linux) to confirm that CNN-LSTM and hyperparameter tuning execute without the macOS workaround. After that, running the pipeline with the `--include-emotional` flag to add the Happy, Calm, Sad, and Scare conditions — these are named in the proposal but have not been executed yet. The output will add four new feature subsets that can be compared with the resting-state baseline and may increase classification sensitivity.
 
