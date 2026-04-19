@@ -18,3 +18,4 @@ pyriemann>=0.4
 # Optional: torch>=2.0 (for CNN-LSTM classifier)
 # Optional: mne-connectivity>=0.6 (for spectral_connectivity_epochs)
 # Optional: mne-bids>=0.14 (for BIDS conversion)
+# Optional: pennylane>=0.32 (for QSVM quantum kernel classifier in Stage 5)

@@ -543,15 +543,33 @@ def run_quantum_exploration(config, epochs_dict, full_df):
     except ImportError:
         pass
 
+    # Quantum kernel SVM classifiers (requires pennylane)
+    try:
+        from stages.qsvm_classifier import QuantumKernelSVM
+        models_to_test.append(("QSVM_6q_ZZ", QuantumKernelSVM(
+            n_qubits=6, n_layers=2, C=1.0, use_entangling=True)))
+        models_to_test.append(("QSVM_4q_ZZ", QuantumKernelSVM(
+            n_qubits=4, n_layers=2, C=1.0, use_entangling=True)))
+        models_to_test.append(("QSVM_6q_prod", QuantumKernelSVM(
+            n_qubits=6, n_layers=2, C=1.0, use_entangling=False)))
+        print("  QSVM classifiers: enabled (pennylane found)")
+    except ImportError:
+        print("  QSVM classifiers: skipped (pip install pennylane)")
+
     results = []
     for fs_name, X in feature_sets.items():
         n_sel = min(10, X.shape[1])
         for model_name, model in models_to_test:
-            pipe = Pipeline([
-                ("scaler", StandardScaler()),
-                ("select", SelectKBest(f_classif, k=n_sel)),
-                ("clf", model),
-            ])
+            # QSVM does internal PCA + scaling — skip Pipeline wrapper
+            is_qsvm = model_name.startswith("QSVM")
+            if is_qsvm:
+                pipe = model
+            else:
+                pipe = Pipeline([
+                    ("scaler", StandardScaler()),
+                    ("select", SelectKBest(f_classif, k=n_sel)),
+                    ("clf", model),
+                ])
 
             try:
                 from sklearn.metrics import make_scorer, recall_score
@@ -611,6 +629,19 @@ def run_quantum_exploration(config, epochs_dict, full_df):
         delta = best_combined - best_classical
         print(f"  Quantum lift:    {delta:+.3f} "
               f"({'quantum adds value' if delta > 0.02 else 'no clear benefit'})")
+
+        # QSVM-specific comparison: quantum kernel vs classical RBF kernel
+        qsvm_rows = res_df[res_df["model"].str.startswith("QSVM")]
+        svm_rows = res_df[res_df["model"] == "SVM"]
+        if not qsvm_rows.empty and not svm_rows.empty:
+            print(f"\n--- QSVM vs Classical SVM ---")
+            for fs in ["quantum_only", "classical_only", "classical_plus_quantum"]:
+                qsvm_best = qsvm_rows[qsvm_rows["feature_set"] == fs]["balanced_accuracy"]
+                svm_score = svm_rows[svm_rows["feature_set"] == fs]["balanced_accuracy"]
+                if not qsvm_best.empty and not svm_score.empty:
+                    diff = qsvm_best.max() - svm_score.values[0]
+                    print(f"  {fs:35s} | QSVM - SVM = {diff:+.3f}")
+            print("  (Positive = quantum kernel outperforms classical RBF kernel)")
 
     # Sensitivity analysis: how does n_bins affect quantum probability features?
     print("\n--- Quantum Binning Sensitivity Analysis ---")
