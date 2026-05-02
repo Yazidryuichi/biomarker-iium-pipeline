@@ -119,13 +119,17 @@ def run_ica(raw, config):
       - Fit ICA on a 1 Hz high-pass copy (slow drifts degrade ICA)
       - Apply the resulting ICA solution to the original 0.5 Hz data
     """
-    n_components = config["cleaning"]["ica_n_components"]
     method = config["cleaning"]["ica_method"]
+    random_state = config.get("random_state", 42)
+
+    # Clip to available EEG channels − 1 (some subjects have bad channels removed)
+    n_eeg = len(mne.pick_types(raw.info, eeg=True))
+    n_components = min(config["cleaning"]["ica_n_components"], n_eeg - 1)
 
     ica = mne.preprocessing.ICA(
         n_components=n_components,
         method=method,
-        random_state=42,
+        random_state=random_state,
         max_iter="auto",
     )
 
@@ -327,12 +331,45 @@ def clean_single_file(filepath, config, subject_id, condition):
     return epochs_clean, qc
 
 
-def run_stage1(config, subjects, conditions=None):
+def load_cleaned_epochs(config, stage_dir=None):
+    """
+    Load previously saved cleaned epochs. Auto-resolves the latest
+    cleaning output directory if ``stage_dir`` is not given.
+    """
+    from utils.io import latest_stage_dir
+
+    if stage_dir is None:
+        stage_dir = latest_stage_dir(config, "cleaning")
+        if stage_dir is None:
+            raise FileNotFoundError(
+                "No cleaning output found. Run `python pipeline.py --cleaning` first."
+            )
+
+    epoch_dir = os.path.join(stage_dir, "cleaned_epochs")
+    all_epochs = {}
+    for f in sorted(os.listdir(epoch_dir)):
+        if f.endswith("-epo.fif"):
+            parts = f.replace("-epo.fif", "").split("_", 1)
+            subject_id = parts[0]
+            condition = parts[1] if len(parts) > 1 else "unknown"
+            epochs = mne.read_epochs(
+                os.path.join(epoch_dir, f), verbose=False
+            )
+            all_epochs[(subject_id, condition)] = epochs
+
+    print(f"  Loaded {len(all_epochs)} epoch files from {epoch_dir}")
+    return all_epochs
+
+
+def run(config, subjects, conditions=None):
     """
     Run Stage 1 cleaning on all subjects and conditions.
 
+    Writes cleaned_epochs/, qc.json, and run_notes.json into
+    ``config['output_dir']`` (created by ``load_stage_config('cleaning')``).
+
     Args:
-        config: pipeline config dict
+        config: merged stage config from ``load_stage_config('cleaning')``
         subjects: dict from discover_subjects()
         conditions: list of conditions to process (default: primary only)
 
@@ -340,11 +377,15 @@ def run_stage1(config, subjects, conditions=None):
         all_epochs: dict {(subject, condition): Epochs}
         qc_report: list of QC dicts
     """
+    from utils.io import write_stage_notes
+
     if conditions is None:
         conditions = config["recording"]["conditions"]["primary"]
 
-    output_dir = os.path.join(config["paths"]["output_dir"], "cleaned_epochs")
+    stage_dir = config["output_dir"]
+    output_dir = os.path.join(stage_dir, "cleaned_epochs")
     os.makedirs(output_dir, exist_ok=True)
+    print(f"  Cleaning output dir: {stage_dir}")
 
     all_epochs = {}
     qc_report = []
@@ -398,7 +439,7 @@ def run_stage1(config, subjects, conditions=None):
             qc_report.append(qc)
 
     # Save QC report
-    qc_path = os.path.join(config["paths"]["output_dir"], "qc_stage1.json")
+    qc_path = os.path.join(stage_dir, "qc.json")
     with open(qc_path, "w") as f:
         json.dump(qc_report, f, indent=2, default=str)
     print(f"\nQC report saved: {qc_path}")
@@ -411,17 +452,29 @@ def run_stage1(config, subjects, conditions=None):
     )
     print(f"\nStage 1 Summary: {ok} OK, {low} low epoch count, {errors} errors")
 
+    write_stage_notes(stage_dir, {
+        "stage": "cleaning",
+        "n_subjects": len(subjects),
+        "conditions": list(conditions),
+        "n_files_processed": len(qc_report),
+        "n_ok": ok,
+        "n_low_epoch": low,
+        "n_errors": errors,
+        "outputs": ["cleaned_epochs/", "qc.json"],
+    })
+
     return all_epochs, qc_report
 
 
 if __name__ == "__main__":
     import sys
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-    from utils.io import load_config, discover_subjects
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    from utils.io import load_stage_config, discover_subjects
 
-    config = load_config()
+    config = load_stage_config("cleaning")
     subjects = discover_subjects(config["paths"]["edf_dir"])
     print(f"Found {len(subjects)} subjects")
 
-    all_epochs, qc = run_stage1(config, subjects)
+    all_epochs, qc = run(config, subjects)

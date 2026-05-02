@@ -40,7 +40,8 @@ def run_descriptives(df, config):
         print(f"  Sex: {dict(sex_counts)}")
 
     # Behavioral measures
-    beh_cols = ["Global_EF", "WM_score", "IC_score", "flanker_effect",
+    beh_cols = ["Global_EF", "WM_score", "IC_score", "CF_score", "P_score", "SF_score",
+                "flanker_effect", "ddm_v", "ddm_a", "ddm_t", "ddm_delta_v",
                 "FW_Span", "BW_Span", "Total_Span"]
     beh_cols = [c for c in beh_cols if c in df.columns]
 
@@ -48,8 +49,8 @@ def run_descriptives(df, config):
     print(f"\n  Behavioral measures:")
     print(desc.to_string())
 
-    # Key QEEG features
-    tbr_cols = [c for c in df.columns if c.startswith("tbr_")]
+    # Key QEEG features (EO condition)
+    tbr_cols = [c for c in df.columns if "tbr_" in c and c.startswith("eo_")]
     if tbr_cols:
         print(f"\n  TBR features:")
         print(df[tbr_cols].describe().round(4).to_string())
@@ -60,9 +61,9 @@ def run_descriptives(df, config):
 def run_correlations(df, config):
     """
     Test hypotheses H1-H3 (pre-specified, not data-driven):
-      H1: negative correlation TBR_frontal ↔ Global_EF
-      H2: negative correlation theta_frontal ↔ Global_EF
-      H3: positive correlation TBR_frontal ↔ Flanker_Effect
+      H1: negative correlation TBR_frontal vs Global_EF
+      H2: negative correlation theta_frontal vs Global_EF
+      H3: positive correlation TBR_frontal vs Flanker_Effect
 
     NOTE on FDR scope: correction is applied across these 8 pre-specified
     tests only, not across all 200+ feature-outcome pairs. These hypotheses
@@ -78,15 +79,19 @@ def run_correlations(df, config):
     results = []
 
     # Pairs to test
+    # EO condition used for TBR/theta hypotheses (resting-state, eyes open)
     test_pairs = [
-        ("tbr_frontal_mean", "Global_EF", "H1: TBR ↔ Global EF (expected: negative)"),
-        ("psd_abs_theta_Fz", "Global_EF", "H2: Theta_Fz ↔ Global EF (expected: negative)"),
-        ("tbr_frontal_mean", "flanker_effect", "H3: TBR ↔ Flanker Effect (expected: positive)"),
-        ("tbr_Fz", "Global_EF", "TBR_Fz ↔ Global EF"),
-        ("tbr_Cz", "Global_EF", "TBR_Cz ↔ Global EF"),
-        ("faa_F4_F3", "Global_EF", "FAA ↔ Global EF"),
-        ("alpha_reactivity_global", "Global_EF", "Alpha Reactivity ↔ Global EF"),
-        ("tbr_frontal_mean", "BW_Span", "TBR ↔ Digit Span Backward"),
+        ("eo_tbr_frontal_mean", "Global_EF", "H1: TBR(EO) vs Global EF (expected: negative)"),
+        ("eo_psd_abs_theta_Fz", "Global_EF", "H2: Theta_Fz(EO) vs Global EF (expected: negative)"),
+        ("eo_tbr_frontal_mean", "flanker_effect", "H3: TBR(EO) vs Flanker Effect (expected: positive)"),
+        ("eo_tbr_Fz", "Global_EF", "TBR_Fz(EO) vs Global EF"),
+        ("eo_tbr_Cz", "Global_EF", "TBR_Cz(EO) vs Global EF"),
+        ("eo_faa_F4_F3", "Global_EF", "FAA(EO) vs Global EF"),
+        ("alpha_reactivity_global", "Global_EF", "Alpha Reactivity vs Global EF"),
+        ("eo_tbr_frontal_mean", "BW_Span", "TBR(EO) vs Digit Span Backward"),
+        ("eo_tbr_frontal_mean", "ddm_v", "TBR(EO) vs DDM Drift Rate (expected: negative)"),
+        ("eo_tbr_frontal_mean", "ddm_delta_v", "TBR(EO) vs DDM Delta-v (expected: negative)"),
+        ("eo_psd_abs_theta_Fz", "ddm_v", "Theta_Fz(EO) vs DDM Drift Rate (expected: negative)"),
     ]
 
     for x_col, y_col, label in test_pairs:
@@ -154,36 +159,80 @@ def get_feature_sets(df, config):
     """
     Define feature sets for comparison.
     Returns dict: {set_name: list of column names}
+
+    Each combined set (EO+EC) is accompanied by condition-specific subsets
+    so the ML table shows whether Eyes-Open or Eyes-Closed features drive
+    predictive performance independently.
     """
     all_cols = df.columns.tolist()
 
-    # Set 1: Conventional QEEG only
-    conventional = [c for c in all_cols if any(c.startswith(p) for p in
-                    ["psd_", "tbr_", "faa_", "alpha_reactivity", "coh_"])]
+    def _match(col, patterns):
+        return any(p in col for p in patterns)
 
-    # Set 2: Conventional + Advanced (wavelet, Hjorth, entropy, PAC)
-    advanced = conventional + [c for c in all_cols if any(c.startswith(p) for p in
-                ["cwt_", "hjorth_", "spectral_entropy_", "pac_"])]
+    CONV_PATTERNS    = ["psd_", "tbr_", "faa_", "alpha_reactivity", "coh_"]
+    ADV_PATTERNS     = ["cwt_", "hjorth_", "spectral_entropy_", "pac_"]
+    COV_PATTERN      = "cov_"
+    QUANTUM_PATTERNS = ["qepp_", "qi_", "tn_"]
 
-    # Set 3: Covariance features only
-    covariance = [c for c in all_cols if c.startswith("cov_")]
+    # --- Combined (EO + EC) sets ---
+    conventional = [c for c in all_cols if _match(c, CONV_PATTERNS)]
+    advanced     = list(dict.fromkeys(
+        conventional + [c for c in all_cols if _match(c, ADV_PATTERNS)]
+    ))
+    covariance   = [c for c in all_cols if COV_PATTERN in c]
+    all_features = list(dict.fromkeys(
+        conventional + [c for c in all_cols if _match(c, ADV_PATTERNS + [COV_PATTERN])]
+    ))
+    quantum      = [c for c in all_cols if _match(c, QUANTUM_PATTERNS)]
 
-    # Set 4: All features combined
-    all_features = conventional + [c for c in all_cols if any(c.startswith(p) for p in
-                   ["cwt_", "hjorth_", "spectral_entropy_", "pac_", "cov_"])]
+    # --- Eyes-Open only ---
+    conventional_eo = [c for c in conventional if c.startswith("eo_") or not (c.startswith("ec_"))]
+    # alpha_reactivity is cross-condition (no prefix); keep in both EO and EC sets
+    conventional_eo = [c for c in conventional if not c.startswith("ec_")]
+    advanced_eo     = [c for c in advanced     if not c.startswith("ec_")]
+    covariance_eo   = [c for c in covariance   if not c.startswith("ec_")]
+    all_features_eo = [c for c in all_features if not c.startswith("ec_")]
 
-    return {
-        "conventional_qeeg": conventional,
-        "conventional_plus_advanced": advanced,
-        "covariance_only": covariance,
-        "all_features": all_features,
+    # --- Eyes-Closed only ---
+    conventional_ec = [c for c in conventional if not c.startswith("eo_")]
+    advanced_ec     = [c for c in advanced     if not c.startswith("eo_")]
+    covariance_ec   = [c for c in covariance   if not c.startswith("eo_")]
+    all_features_ec = [c for c in all_features if not c.startswith("eo_")]
+
+    feature_sets = {
+        # Combined EO+EC
+        "conventional_qeeg":          conventional,
+        "conventional_plus_advanced":  advanced,
+        "covariance_only":             covariance,
+        "all_features":                all_features,
+        # Eyes-Open only
+        "conventional_qeeg_eo":        conventional_eo,
+        "conventional_plus_advanced_eo": advanced_eo,
+        "covariance_only_eo":          covariance_eo,
+        "all_features_eo":             all_features_eo,
+        # Eyes-Closed only
+        "conventional_qeeg_ec":        conventional_ec,
+        "conventional_plus_advanced_ec": advanced_ec,
+        "covariance_only_ec":          covariance_ec,
+        "all_features_ec":             all_features_ec,
     }
 
+    # Quantum-inspired sets (only when those columns are present, i.e.
+    # features.include_quantum was true at extraction time)
+    if quantum:
+        feature_sets["quantum_only"] = quantum
+        feature_sets["classical_plus_quantum"] = list(dict.fromkeys(all_features + quantum))
 
-def _build_models(random_state):
+    return feature_sets
+
+
+def _build_models(random_state, include_qsvm=False):
     """
-    Build all 8 models specified in the research proposal:
-    RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP, CNN-LSTM.
+    Build models for classification.
+    Always tries: RF, SVM, KNN, MLP + (XGBoost, LightGBM, CatBoost) if available.
+    CNN-LSTM is built in a separate path (PyTorch).
+    QSVM (quantum-kernel) models are added when ``include_qsvm`` is true and
+    pennylane is installed.
     Gracefully skips models whose dependencies are missing.
     """
     from sklearn.linear_model import LogisticRegression
@@ -273,6 +322,16 @@ def _build_models(random_state):
     except ImportError:
         print("  [INFO] CatBoost not installed — skipping")
 
+    # Quantum-kernel SVM models (opt-in via ml.include_qsvm)
+    if include_qsvm:
+        try:
+            from stages.analysis.qsvm_classifier import QuantumKernelSVM
+            models["QSVM_4q_ZZ"]   = QuantumKernelSVM(n_qubits=4, n_layers=2, C=1.0, use_entangling=True)
+            models["QSVM_6q_ZZ"]   = QuantumKernelSVM(n_qubits=6, n_layers=2, C=1.0, use_entangling=True)
+            models["QSVM_6q_prod"] = QuantumKernelSVM(n_qubits=6, n_layers=2, C=1.0, use_entangling=False)
+        except ImportError:
+            print("  [INFO] QSVM requested but pennylane not installed — skipping")
+
     return models
 
 
@@ -290,11 +349,15 @@ def _make_scoring():
     }
 
 
-def run_classification(df, config):
+def run_classification(df, config, target=None):
     """
     ML classification comparing feature sets and models.
     Implements all 8 algorithms from the research proposal (Section 2.4.2):
     RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP, CNN-LSTM.
+
+    Args:
+        target: continuous behavioral column to predict. Falls back to
+                ml.target/ml.targets[0] in config when None.
     """
     from sklearn.model_selection import RepeatedStratifiedKFold, \
         permutation_test_score
@@ -312,10 +375,15 @@ def run_classification(df, config):
 
     # Use continuous EF scores — median split done INSIDE each CV fold
     # to prevent target leakage (threshold from training fold only)
-    continuous_col = "Global_EF"
+    if target is None:
+        from utils.io import get_targets
+        target = get_targets(config)[0]
+    continuous_col = target
     if continuous_col not in df.columns or df[continuous_col].isna().all():
-        print("  ERROR: No valid classification target")
-        return pd.DataFrame()
+        print(f"  ERROR: Target '{continuous_col}' not found or all-NaN. "
+              f"Check ml.targets in config.yaml")
+        return pd.DataFrame(), {}
+    print(f"  Target variable: {continuous_col}")
 
     y_continuous = df[continuous_col].dropna()
     valid_idx = y_continuous.index
@@ -325,15 +393,30 @@ def run_classification(df, config):
     y_global = (y_continuous > global_median).astype(int)
 
     feature_sets = get_feature_sets(df, config)
-    cv_folds = config["ml"]["cv_folds"]
-    cv_repeats = config["ml"]["cv_repeats"]
-    random_state = config["ml"]["random_state"]
+    ana = config["analysis"]
+    cv_folds = ana["cv_folds"]
+    cv_repeats = ana["cv_repeats"]
+    random_state = config["random_state"]
 
     cv = RepeatedStratifiedKFold(
         n_splits=cv_folds, n_repeats=cv_repeats, random_state=random_state
     )
 
-    models = _build_models(random_state)
+    enabled_models = ana.get("models", [])
+    # Strip inline YAML comments that survive as trailing text (e.g. "XGBoost # requires...")
+    enabled_models = [m.split("#")[0].strip() for m in enabled_models if m]
+    include_qsvm = ana.get("include_qsvm", False)
+    if include_qsvm:
+        # Auto-include QSVM model names so the user doesn't need to list each one
+        for q in ("QSVM_4q_ZZ", "QSVM_6q_ZZ", "QSVM_6q_prod"):
+            if q not in enabled_models:
+                enabled_models.append(q)
+    models = {k: v for k, v in _build_models(random_state, include_qsvm=include_qsvm).items()
+              if k in enabled_models}
+    if not models:
+        print("  ERROR: No models enabled. Check ml.models in config.yaml")
+        return pd.DataFrame(), {}
+    print(f"  Models enabled: {list(models.keys())}")
 
     results = []
 
@@ -357,6 +440,8 @@ def run_classification(df, config):
                 "sens": [], "spec": [],
             }
 
+            is_qsvm = model_name.startswith("QSVM")
+
             try:
                 for train_idx, test_idx in cv.split(X, y_global):
                     X_train = X.iloc[train_idx]
@@ -367,15 +452,24 @@ def run_classification(df, config):
                     y_train = (y_continuous.iloc[train_idx] > train_median).astype(int)
                     y_test = (y_continuous.iloc[test_idx] > train_median).astype(int)
 
-                    pipe = Pipeline([
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                        ("select", SelectKBest(f_classif, k=n_select)),
-                        ("clf", model),
-                    ])
+                    if is_qsvm:
+                        # QSVM does its own PCA + scaling internally; only impute NaNs
+                        imputer = SimpleImputer(strategy="median")
+                        X_train_in = imputer.fit_transform(X_train)
+                        X_test_in  = imputer.transform(X_test)
+                        model.fit(X_train_in, y_train)
+                        pipe = model  # used for predict_proba/decision_function below
+                    else:
+                        pipe = Pipeline([
+                            ("imputer", SimpleImputer(strategy="median")),
+                            ("scaler", StandardScaler()),
+                            ("select", SelectKBest(f_classif, k=n_select)),
+                            ("clf", model),
+                        ])
+                        pipe.fit(X_train, y_train)
+                        X_test_in = X_test
 
-                    pipe.fit(X_train, y_train)
-                    preds = pipe.predict(X_test)
+                    preds = pipe.predict(X_test_in)
 
                     fold_metrics["bal_acc"].append(
                         balanced_accuracy_score(y_test, preds))
@@ -386,13 +480,16 @@ def run_classification(df, config):
                     fold_metrics["spec"].append(
                         recall_score(y_test, preds, pos_label=0, zero_division=0))
                     try:
+                        if len(np.unique(y_test)) < 2:
+                            raise ValueError("single class in fold")
                         if hasattr(pipe, "predict_proba"):
-                            probs = pipe.predict_proba(X_test)[:, 1]
+                            probs = pipe.predict_proba(X_test_in)[:, 1]
                         else:
-                            probs = pipe.decision_function(X_test)
+                            probs = pipe.decision_function(X_test_in)
+                        probs = np.nan_to_num(np.array(probs, dtype=float), nan=0.5)
                         fold_metrics["auc"].append(roc_auc_score(y_test, probs))
                     except Exception:
-                        fold_metrics["auc"].append(0.5)
+                        fold_metrics["auc"].append(np.nan)
 
                 # Bootstrap 95% CI for balanced accuracy
                 ba_scores = np.array(fold_metrics["bal_acc"])
@@ -415,7 +512,7 @@ def run_classification(df, config):
                     "ci_lower": round(ci_lower, 3),
                     "ci_upper": round(ci_upper, 3),
                     "f1": round(np.mean(fold_metrics["f1"]), 3),
-                    "auc": round(np.mean(fold_metrics["auc"]), 3),
+                    "auc": round(float(np.nanmean(fold_metrics["auc"])) if fold_metrics["auc"] else float("nan"), 3),
                     "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
                     "specificity": round(np.mean(fold_metrics["spec"]), 3),
                 }
@@ -438,17 +535,19 @@ def run_classification(df, config):
                 gc.collect()  # Free memory between model runs
 
     # CNN-LSTM (PyTorch-based, separate CV loop)
-    # Disabled by default: PyTorch hangs after sklearn joblib on macOS.
-    # Set RUN_CNN_LSTM=1 to enable.
+    # Enable by adding "CNN-LSTM" to ml.models in config.yaml.
+    # Env var RUN_CNN_LSTM=1 also works as an override.
     import os as _os
-    if _os.environ.get("RUN_CNN_LSTM", "0") == "1":
+    cnn_lstm_in_config = "CNN-LSTM" in enabled_models
+    cnn_lstm_env = _os.environ.get("RUN_CNN_LSTM", "0") == "1"
+    if cnn_lstm_in_config or cnn_lstm_env:
         try:
             cnn_lstm_results = _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config)
             results.extend(cnn_lstm_results)
         except Exception as e:
             print(f"  [INFO] CNN-LSTM failed: {e}")
     else:
-        print("  [INFO] CNN-LSTM skipped (set RUN_CNN_LSTM=1 to enable)")
+        print("  [INFO] CNN-LSTM skipped (add 'CNN-LSTM' to ml.models in config.yaml to enable)")
 
     # Permutation test on best model to verify above-chance performance
     # Uses global median split (required by sklearn: fixed y for permutation)
@@ -526,7 +625,7 @@ def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
         roc_auc_score, recall_score
     from scipy.stats import randint, uniform
 
-    random_state = config["ml"]["random_state"]
+    random_state = config["random_state"]
     fs_cols_valid = [c for c in fs_cols if c in df.columns]
     X = df.loc[valid_idx, fs_cols_valid]  # no fillna — imputer handles NaN
     n_select = max(5, min(15, len(fs_cols_valid) // 10))
@@ -608,7 +707,7 @@ def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
             "balanced_accuracy": round(np.mean(fold_metrics["bal_acc"]), 3),
             "bal_acc_std": round(np.std(fold_metrics["bal_acc"]), 3),
             "f1": round(np.mean(fold_metrics["f1"]), 3),
-            "auc": round(np.mean(fold_metrics["auc"]), 3),
+            "auc": round(float(np.nanmean(fold_metrics["auc"])) if fold_metrics["auc"] else float("nan"), 3),
             "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
             "specificity": round(np.mean(fold_metrics["spec"]), 3),
         }
@@ -661,9 +760,10 @@ def _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config):
             out = self.fc(h_n.squeeze(0))       # (batch, 1)
             return out.squeeze(-1)
 
-    random_state = config["ml"]["random_state"]
-    cv_folds = config["ml"]["cv_folds"]
-    cv_repeats = config["ml"]["cv_repeats"]
+    ana = config["analysis"]
+    random_state = config["random_state"]
+    cv_folds = ana["cv_folds"]
+    cv_repeats = ana["cv_repeats"]
     cv = RepeatedStratifiedKFold(
         n_splits=cv_folds, n_repeats=cv_repeats, random_state=random_state
     )
@@ -733,7 +833,7 @@ def _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config):
             "balanced_accuracy": round(np.mean(fold_metrics["bal_acc"]), 3),
             "bal_acc_std": round(np.std(fold_metrics["bal_acc"]), 3),
             "f1": round(np.mean(fold_metrics["f1"]), 3),
-            "auc": round(np.mean(fold_metrics["auc"]), 3),
+            "auc": round(float(np.nanmean(fold_metrics["auc"])) if fold_metrics["auc"] else float("nan"), 3),
             "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
             "specificity": round(np.mean(fold_metrics["spec"]), 3),
         }
@@ -755,13 +855,17 @@ def _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config):
 # 4C. SHAP Analysis
 # ──────────────────────────────────────────────────────────────────
 
-def run_shap_analysis(df, config, best_info=None):
+def run_shap_analysis(df, config, best_info=None, target=None, output_dir=None):
     """
     SHAP analysis on the best-performing model/feature-set combination
     to identify candidate biomarker features.
 
     Args:
         best_info: dict with 'feature_set' and 'model' from classification
+        target: continuous column for binary labels. Falls back to first
+                configured target.
+        output_dir: directory for SHAP outputs (figures + annotated csv).
+                Falls back to config.paths.analysis_dir.
     """
     print("\n" + "-" * 40)
     print("4C. SHAP Feature Importance")
@@ -781,11 +885,17 @@ def run_shap_analysis(df, config, best_info=None):
     # Use best feature set from classification, or fall back to conventional
     best_feature_set = (best_info or {}).get("feature_set", "conventional_qeeg")
 
-    # Use continuous EF with global median for SHAP labels
-    continuous_col = "Global_EF"
+    if target is None:
+        from utils.io import get_targets
+        target = get_targets(config)[0]
+    continuous_col = target
+    if continuous_col not in df.columns or df[continuous_col].isna().all():
+        print(f"  SKIP: Target '{continuous_col}' not found or all-NaN.")
+        return None
     y_cont = df[continuous_col].dropna()
     y = (y_cont > y_cont.median()).astype(int)
     valid_idx = y.index
+    print(f"  Target variable: {continuous_col}")
 
     feature_sets = get_feature_sets(df, config)
     fs_cols = feature_sets.get(best_feature_set, [])
@@ -822,7 +932,7 @@ def run_shap_analysis(df, config, best_info=None):
     # SHAP importance on a model trained on all 28 subjects is misleading.
     from sklearn.model_selection import StratifiedKFold as _SKF
 
-    random_state_shap = config["ml"]["random_state"]
+    random_state_shap = config["random_state"]
     cv_shap = _SKF(n_splits=5, shuffle=True, random_state=random_state_shap)
 
     all_shap_values = []
@@ -890,7 +1000,8 @@ def run_shap_analysis(df, config, best_info=None):
         logger.warning(f"Biological interpretation skipped: {e}")
 
     # Save SHAP summary plot
-    figures_dir = config["paths"]["figures_dir"]
+    out_dir = output_dir or config["output_dir"]
+    figures_dir = os.path.join(out_dir, "figures")
     os.makedirs(figures_dir, exist_ok=True)
 
     try:
@@ -918,7 +1029,7 @@ def run_shap_analysis(df, config, best_info=None):
         from utils.bio_interpretation import interpret_biomarkers
         annotated = interpret_biomarkers(importance)
         annotated.to_csv(
-            os.path.join(config["paths"]["output_dir"], "shap_annotated.csv"),
+            os.path.join(out_dir, "shap_annotated.csv"),
             index=False,
         )
         logger.info("Annotated SHAP importance saved")
@@ -932,51 +1043,112 @@ def run_shap_analysis(df, config, best_info=None):
 # Main
 # ──────────────────────────────────────────────────────────────────
 
-def run_stage4(config, full_df):
-    """Run full Stage 4 analysis."""
+def run(config, full_df=None):
+    """
+    Run full Stage 4 analysis. Loops 4B (classification) and 4C (SHAP)
+    over every target listed in ``config['analysis']['targets']``.
+    Descriptives and correlations are target-agnostic and run once.
+
+    Writes correlations.csv at ``config['output_dir']``, plus per-target
+    ml_results.csv, shap_importance.csv, shap_annotated.csv, and figures/
+    subdir. Auto-loads full_dataset.csv from ``config['input_dir']``
+    (latest engineering run) when ``full_df`` is None.
+    """
+    from utils.io import get_targets, write_stage_notes
+    from stages.engineering import load_full_dataset
+
     print("\n" + "=" * 60)
     print("STAGE 4: Analysis")
     print("=" * 60)
 
-    # 4A: Descriptives + Correlations
+    engineering_input = config.get("input_dir")
+    if full_df is None:
+        if engineering_input is None:
+            raise FileNotFoundError(
+                "No engineering output found. "
+                "Run `python pipeline.py --engineering` first."
+            )
+        full_df = load_full_dataset(config, stage_dir=engineering_input)
+
+    # 4A: Descriptives + Correlations (target-agnostic)
     desc = run_descriptives(full_df, config)
     corr_results = run_correlations(full_df, config)
 
-    # 4B: ML Classification
-    ml_results, best_info = run_classification(full_df, config)
-
-    # 4C: SHAP on best-performing model/feature-set
-    shap_importance = run_shap_analysis(full_df, config, best_info=best_info)
-
-    # Save all results
-    output_dir = config["paths"]["output_dir"]
+    base_dir = config["output_dir"]
+    print(f"  Analysis output dir: {base_dir}")
 
     if not corr_results.empty:
         corr_results.to_csv(
-            os.path.join(output_dir, "correlations.csv"), index=False
+            os.path.join(base_dir, "correlations.csv"), index=False
         )
 
-    if not ml_results.empty:
-        ml_results.to_csv(
-            os.path.join(output_dir, "ml_results.csv"), index=False
+    targets = get_targets(config)
+    multi = len(targets) > 1
+    print(f"\n  Targets to analyse: {targets}")
+
+    per_target = {}
+    for target in targets:
+        print("\n" + "#" * 60)
+        print(f"# TARGET: {target}")
+        print("#" * 60)
+
+        # Per-target output directory (subdir only when >1 target — preserves
+        # the legacy single-target layout)
+        target_dir = os.path.join(base_dir, target) if multi else base_dir
+        os.makedirs(target_dir, exist_ok=True)
+
+        if target not in full_df.columns or full_df[target].isna().all():
+            print(f"  SKIP: '{target}' missing or all-NaN in full_dataset.")
+            per_target[target] = {"ml_results": pd.DataFrame(), "shap_importance": None}
+            continue
+
+        # 4B: ML classification
+        ml_results, best_info = run_classification(full_df, config, target=target)
+
+        # 4C: SHAP on best-performing model/feature-set
+        shap_importance = run_shap_analysis(
+            full_df, config, best_info=best_info,
+            target=target, output_dir=target_dir,
         )
 
-        # Find best model
-        best = ml_results.loc[ml_results["balanced_accuracy"].idxmax()]
-        print(f"\n  BEST MODEL:")
-        print(f"    Feature set: {best['feature_set']}")
-        print(f"    Model: {best['model']}")
-        print(f"    Balanced accuracy: {best['balanced_accuracy']:.3f}")
-        print(f"    H4 target (>=0.75): {'MET' if best['balanced_accuracy'] >= 0.75 else 'NOT MET'}")
+        if not ml_results.empty:
+            ml_results.to_csv(
+                os.path.join(target_dir, "ml_results.csv"), index=False
+            )
+            best = ml_results.loc[ml_results["balanced_accuracy"].idxmax()]
+            print(f"\n  BEST MODEL ({target}):")
+            print(f"    Feature set: {best['feature_set']}")
+            print(f"    Model: {best['model']}")
+            print(f"    Balanced accuracy: {best['balanced_accuracy']:.3f}")
+            print(f"    H4 target (>=0.75): {'MET' if best['balanced_accuracy'] >= 0.75 else 'NOT MET'}")
 
-    if shap_importance is not None:
-        shap_importance.to_csv(
-            os.path.join(output_dir, "shap_importance.csv"), index=False
-        )
+        if shap_importance is not None:
+            shap_importance.to_csv(
+                os.path.join(target_dir, "shap_importance.csv"), index=False
+            )
+
+        per_target[target] = {
+            "ml_results": ml_results,
+            "shap_importance": shap_importance,
+            "best_info": best_info,
+            "output_dir": target_dir,
+        }
+
+    write_stage_notes(base_dir, {
+        "stage": "analysis",
+        "input_engineering_dir": engineering_input,
+        "targets": targets,
+        "n_subjects": int(full_df.shape[0]),
+        "outputs": (
+            ["correlations.csv"]
+            + [f"{t}/ml_results.csv" if multi else "ml_results.csv" for t in targets]
+            + [f"{t}/shap_importance.csv" if multi else "shap_importance.csv" for t in targets]
+        ),
+    })
 
     return {
         "descriptives": desc,
         "correlations": corr_results,
-        "ml_results": ml_results,
-        "shap_importance": shap_importance,
+        "targets": targets,
+        "per_target": per_target,
     }

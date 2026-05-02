@@ -1,0 +1,80 @@
+# Stage 4: Analysis (descriptives, correlations, classification, SHAP)
+# =====================================================================
+# input.from: engineering   → reads latest results/engineering/<ts>/full_dataset.csv
+# output.to:  analysis      → writes to results/analysis/<YYYY-MM-DD_HHMMSS>/
+
+input:
+  from: engineering
+
+output:
+  to: analysis
+
+params:
+  cv_folds: 2
+  cv_repeats: 5
+  test_size: 0.2
+  # Quantum-kernel SVM models (QSVM_4q_ZZ, QSVM_6q_ZZ, QSVM_6q_prod).
+  # Requires `pip install pennylane`. Slow per-fold; only useful when
+  # quantum features are enabled at extraction (stages/features/config.yaml).
+  include_qsvm: false
+
+  # --- Targets (continuous score; median split done inside CV fold) ---
+  # Multi-target supported: list any number. Output layout becomes
+  # analysis/<ts>/<target>/ml_results.csv when len(targets) > 1.
+  #
+  # Available columns produced by stage engineering:
+  #
+  #   AUFEI-O questionnaire (parent-rated executive function):
+  #   Global_EF       — mean of all AUFEI-O subscales (primary outcome)
+  #   WM_score        — Working Memory subscale mean
+  #   IC_score        — Inhibitory Control subscale mean
+  #   CF_score        — Cognitive Flexibility subscale mean
+  #   P_score         — Planning subscale mean
+  #   SF_score        — Shifting subscale mean
+  #
+  #   Flanker task (computerised inhibitory control):
+  #   flanker_effect  — congruent RT minus incongruent RT (ms); larger = worse IC
+  #   flanker_acc     — overall accuracy (proportion correct)
+  #   ddm_v           — EZ-DDM drift rate (higher = faster evidence accumulation)
+  #   ddm_a           — EZ-DDM boundary separation (higher = more cautious)
+  #   ddm_t           — EZ-DDM non-decision time (seconds)
+  #   ddm_delta_v     — drift rate difference: congruent minus incongruent
+  #
+  #   Digit Span (working memory capacity):
+  #   FW_Span         — forward digit span score
+  #   BW_Span         — backward digit span score
+  targets:
+    - Global_EF
+    - WM_score
+    - IC_score
+    # - CF_score
+    # - P_score
+    # - SF_score
+    # - flanker_effect
+    # - flanker_acc
+    # - ddm_v
+    # - ddm_a
+    # - ddm_t
+    # - ddm_delta_v
+    # - FW_Span
+    # - BW_Span
+
+  # --- Models (comment out any line to disable that model) ---
+  # CNN-LSTM requires PyTorch and runs in a separate loop regardless of
+  # position in this list (sklearn joblib + macOS hangs).
+  models:
+    - RandomForest
+    - XGBoost       # requires: pip install xgboost
+    - LightGBM      # requires: pip install lightgbm
+    - CatBoost      # requires: pip install catboost
+    - SVM
+    - KNN
+    - MLP
+    - CNN-LSTM      # requires: pip install torch
+
+  scoring:
+    - balanced_accuracy
+    - f1
+    - roc_auc
+    - sensitivity
+    - specificity

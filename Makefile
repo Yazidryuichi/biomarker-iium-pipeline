@@ -1,30 +1,27 @@
-.PHONY: all clean stage1 stage2 stage3 stage4 stage5 validate figures docker test
+.PHONY: all clean cleaning features engineering analysis validate figures docker test install bids evaluate
 
 # Default: run full pipeline
 all: validate
-	python run_all.py
+	python pipeline.py
 
-# Individual stages
-stage1:
-	python run_all.py --stage 1
+# Individual stages — each writes to results/<stage>/<timestamp>/
+cleaning:
+	python pipeline.py --cleaning
 
-stage2:
-	python run_all.py --stage 2
+features:
+	python pipeline.py --features
 
-stage3:
-	python run_all.py --stage 3
+engineering:
+	python pipeline.py --engineering
 
-stage4:
-	python run_all.py --stage 4
-
-stage5:
-	python run_all.py --stage 5
+analysis:
+	python pipeline.py --analysis
 
 # Validate data setup before running
 validate:
 	python validate_data.py
 
-# Generate publication figures
+# Generate publication figures from latest analysis output
 figures:
 	python generate_figures.py
 
@@ -41,12 +38,10 @@ docker:
 bids:
 	python convert_to_bids.py
 
-# Clean derived outputs (preserves raw data)
+# Clean all stage outputs (preserves raw data)
 clean:
-	rm -rf results/cleaned_epochs results/features.csv results/full_dataset.csv
-	rm -rf results/ml_results.csv results/correlations.csv results/shap_importance.csv
-	rm -rf results/quantum_features.csv results/quantum_vs_classical.csv
-	rm -rf figures/*.png
+	rm -rf results/cleaning results/features results/engineering results/analysis
+	rm -rf docs/figures/*.png
 
 # Install dependencies
 install:
@@ -54,4 +49,4 @@ install:
 
 # Single subject test
 test:
-	python run_all.py --subject D0000795
+	python pipeline.py --subject D0000795

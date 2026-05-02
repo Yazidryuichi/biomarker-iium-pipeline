@@ -1,0 +1,31 @@
+# Stage 2: Features (raw primitives)
+# ==================================
+# input.from: cleaning      → reads latest results/cleaning/<ts>/cleaned_epochs/
+# output.to:  features      → writes to results/features/<YYYY-MM-DD_HHMMSS>/
+
+input:
+  from: cleaning
+
+output:
+  to: features
+
+params:
+  # Frequency bands
+  bands:
+    delta: [1, 4]
+    theta: [4, 8]
+    alpha: [8, 13]
+    beta:  [13, 30]
+  # Coherence pairs
+  coherence_pairs:
+    - ["Fz", "Pz"]
+    - ["F3", "P3"]
+    - ["F4", "P4"]
+  # Wavelet parameters
+  wavelet: "cmor1.5-1.0"
+  wavelet_n_freqs: 30
+  wavelet_freq_range: [2, 45]
+  # Quantum-inspired features (QEPP, QI, tensor-network density matrix).
+  # Slow to compute (~30s/subject extra). When enabled, also makes the
+  # quantum_only / classical_plus_quantum feature sets visible in Stage 4.
+  include_quantum: false

@@ -1,12 +1,16 @@
 """
-Stage 2: QEEG Feature Extraction
-==================================
-Extracts three tiers of features from cleaned epochs:
-  2A. Conventional QEEG: PSD, TBR, FAA, alpha reactivity, coherence
+Stage 2: QEEG Feature Extraction (raw primitives only)
+=======================================================
+Extracts three tiers of *primitive* features from cleaned epochs.
+Math-derived composites (TBR, FAA, alpha reactivity) live in Stage 3
+(feature engineering), which computes them from the band powers stored
+here.
+
+  2A. Conventional QEEG: PSD per band per channel, coherence per pair
   2B. Advanced: wavelet-Fourier, PAC, entropy, Hjorth parameters
   2C. Covariance (coffeine): frequency-band covariance matrices
 
-Output: features.csv (one row per subject, ~200+ columns)
+Output: features.csv (one row per subject)
 """
 
 import logging
@@ -61,102 +65,6 @@ def extract_psd_features(epochs, bands, method="welch"):
             features[f"psd_rel_{band_name}_{ch}"] = (
                 band_power[i] / total_power[i] if total_power[i] > 0 else 0
             )
-
-    return features
-
-
-def extract_tbr(epochs, bands, tbr_channels):
-    """
-    Theta/Beta Ratio at specified frontal/central channels.
-    """
-    psd = epochs.compute_psd(method="welch", fmin=0.5, fmax=45, verbose=False)
-    psd_data = np.mean(psd.get_data(), axis=0)
-    freqs = psd.freqs
-    ch_names = epochs.ch_names
-
-    theta_mask = (freqs >= bands["theta"][0]) & (freqs < bands["theta"][1])
-    beta_mask = (freqs >= bands["beta"][0]) & (freqs < bands["beta"][1])
-
-    features = {}
-    for ch in tbr_channels:
-        if ch not in ch_names:
-            continue
-        idx = ch_names.index(ch)
-        theta_power = np.trapz(psd_data[idx, theta_mask], freqs[theta_mask])
-        beta_power = np.trapz(psd_data[idx, beta_mask], freqs[beta_mask])
-        tbr = theta_power / beta_power if beta_power > 0 else np.nan
-        features[f"tbr_{ch}"] = tbr
-
-    # Mean frontal TBR
-    tbr_vals = [v for v in features.values() if not np.isnan(v)]
-    features["tbr_frontal_mean"] = np.mean(tbr_vals) if tbr_vals else np.nan
-
-    return features
-
-
-def extract_faa(epochs, bands, left_ch, right_ch):
-    """
-    Frontal Alpha Asymmetry: ln(alpha_right) - ln(alpha_left).
-    Positive = greater left frontal activity (approach motivation).
-    """
-    psd = epochs.compute_psd(method="welch", fmin=0.5, fmax=45, verbose=False)
-    psd_data = np.mean(psd.get_data(), axis=0)
-    freqs = psd.freqs
-    ch_names = epochs.ch_names
-
-    alpha_mask = (freqs >= bands["alpha"][0]) & (freqs < bands["alpha"][1])
-
-    features = {}
-    if left_ch in ch_names and right_ch in ch_names:
-        left_idx = ch_names.index(left_ch)
-        right_idx = ch_names.index(right_ch)
-        alpha_left = np.trapz(psd_data[left_idx, alpha_mask], freqs[alpha_mask])
-        alpha_right = np.trapz(psd_data[right_idx, alpha_mask], freqs[alpha_mask])
-
-        faa = np.log(alpha_right + 1e-10) - np.log(alpha_left + 1e-10)
-        features["faa_F4_F3"] = faa
-    else:
-        features["faa_F4_F3"] = np.nan
-
-    return features
-
-
-def extract_alpha_reactivity(epochs_eo, epochs_ec, bands):
-    """
-    Alpha reactivity: change in alpha power from Eyes Closed to Eyes Open.
-    EC > EO indicates normal desynchronization.
-    """
-    features = {}
-
-    if epochs_eo is None or epochs_ec is None:
-        features["alpha_reactivity_global"] = np.nan
-        return features
-
-    psd_eo = epochs_eo.compute_psd(method="welch", fmin=0.5, fmax=45, verbose=False)
-    psd_ec = epochs_ec.compute_psd(method="welch", fmin=0.5, fmax=45, verbose=False)
-
-    freqs = psd_eo.freqs
-    alpha_mask = (freqs >= bands["alpha"][0]) & (freqs < bands["alpha"][1])
-
-    mean_eo = np.mean(psd_eo.get_data(), axis=0)
-    mean_ec = np.mean(psd_ec.get_data(), axis=0)
-
-    alpha_eo = np.mean(np.trapz(mean_eo[:, alpha_mask], freqs[alpha_mask], axis=1))
-    alpha_ec = np.mean(np.trapz(mean_ec[:, alpha_mask], freqs[alpha_mask], axis=1))
-
-    # Reactivity: how much alpha drops from EC to EO
-    reactivity = (alpha_ec - alpha_eo) / (alpha_ec + 1e-10)
-    features["alpha_reactivity_global"] = reactivity
-
-    # Per-channel reactivity for posterior channels
-    for ch in ["O1", "O2", "Pz"]:
-        ch_names = epochs_eo.ch_names
-        if ch in ch_names:
-            idx = ch_names.index(ch)
-            eo_alpha = np.trapz(mean_eo[idx, alpha_mask], freqs[alpha_mask])
-            ec_alpha = np.trapz(mean_ec[idx, alpha_mask], freqs[alpha_mask])
-            r = (ec_alpha - eo_alpha) / (ec_alpha + 1e-10)
-            features[f"alpha_reactivity_{ch}"] = r
 
     return features
 
@@ -419,7 +327,15 @@ def extract_covariance_features(epochs, bands):
 
 def extract_all_features(epochs_dict, config):
     """
-    Extract all features for all subjects.
+    Extract raw primitive features for all subjects.
+    Composite/derived features (TBR, FAA, alpha reactivity) are computed
+    later by stages/engineering.py.
+
+    When ``features.include_quantum`` is true in config, also extracts
+    quantum-inspired features (QEPP, QI, tensor-network) from the primary
+    Eyes-Open epoch per subject. These are unprefixed columns
+    (qepp_*, qi_*, tn_*) since they are cross-condition density-matrix
+    representations.
 
     Args:
         epochs_dict: {(subject_id, condition): mne.Epochs}
@@ -430,10 +346,11 @@ def extract_all_features(epochs_dict, config):
         cov_matrices: dict for Riemannian classifiers
     """
     bands = config["features"]["bands"]
-    tbr_channels = config["features"]["tbr_channels"]
-    faa_left = config["features"]["faa_left"]
-    faa_right = config["features"]["faa_right"]
     coherence_pairs = config["features"]["coherence_pairs"]
+    include_quantum = config["features"].get("include_quantum", False)
+
+    if include_quantum:
+        from stages.features._quantum import extract_quantum_features_per_subject
 
     # Group epochs by subject
     subjects = {}
@@ -442,6 +359,9 @@ def extract_all_features(epochs_dict, config):
             subjects[sub] = {}
         subjects[sub][cond] = epochs
 
+    # Condition prefix map — extend here if emotional conditions are added
+    COND_PREFIX = {"Eyes_Open": "eo", "Eyes_Closed": "ec"}
+
     all_features = []
     all_cov_matrices = {}
 
@@ -449,70 +369,114 @@ def extract_all_features(epochs_dict, config):
         print(f"\n  Extracting features: {sub_id}")
         sub_epochs = subjects[sub_id]
 
-        # Use Eyes_Open as primary condition
-        primary_cond = "Eyes_Open"
-        if primary_cond not in sub_epochs:
-            primary_cond = list(sub_epochs.keys())[0]
+        row = {"subject_id": sub_id}
 
-        epochs = sub_epochs[primary_cond]
-        row = {"subject_id": sub_id, "condition": primary_cond}
+        # Extract features per condition, prefix all columns with eo_ / ec_
+        for cond, prefix in COND_PREFIX.items():
+            if cond not in sub_epochs:
+                continue
+            epochs = sub_epochs[cond]
+            cond_feats = {}
 
-        # 2A: Conventional QEEG
-        row.update(extract_psd_features(epochs, bands))
-        row.update(extract_tbr(epochs, bands, tbr_channels))
-        row.update(extract_faa(epochs, bands, faa_left, faa_right))
-        row.update(
-            extract_coherence(epochs, coherence_pairs, bands)
-        )
+            # 2A: Conventional QEEG (primitives only)
+            cond_feats.update(extract_psd_features(epochs, bands))
+            cond_feats.update(extract_coherence(epochs, coherence_pairs, bands))
 
-        # Alpha reactivity (needs both EO and EC)
-        eo = sub_epochs.get("Eyes_Open")
-        ec = sub_epochs.get("Eyes_Closed")
-        row.update(extract_alpha_reactivity(eo, ec, bands))
+            # 2B: Advanced
+            cond_feats.update(extract_wavelet_features(epochs, config))
+            cond_feats.update(extract_hjorth(epochs))
+            cond_feats.update(extract_entropy(epochs))
+            cond_feats.update(extract_pac(epochs, bands))
 
-        # 2B: Advanced
-        row.update(extract_wavelet_features(epochs, config))
-        row.update(extract_hjorth(epochs))
-        row.update(extract_entropy(epochs))
-        row.update(extract_pac(epochs, bands))
+            # 2C: Covariance
+            cov_feats, cov_mats = extract_covariance_features(epochs, bands)
+            cond_feats.update(cov_feats)
+            all_cov_matrices[f"{sub_id}_{prefix}"] = cov_mats
 
-        # 2C: Covariance
-        cov_feats, cov_mats = extract_covariance_features(epochs, bands)
-        row.update(cov_feats)
-        all_cov_matrices[sub_id] = cov_mats
+            row.update({f"{prefix}_{k}": v for k, v in cond_feats.items()})
+
+        # Quantum-inspired features (Eyes-Open primary) — unprefixed
+        if include_quantum:
+            primary_cond = "Eyes_Open" if "Eyes_Open" in sub_epochs else next(iter(sub_epochs))
+            q_feats = extract_quantum_features_per_subject(sub_epochs[primary_cond], bands)
+            row.update(q_feats)
+            print(f"    +{len(q_feats)} quantum-inspired features")
 
         all_features.append(row)
-        n_feats = len(row) - 2  # minus subject_id and condition
+        n_feats = len(row) - 1  # minus subject_id
         print(f"    {n_feats} features extracted")
 
     df = pd.DataFrame(all_features)
     return df, all_cov_matrices
 
 
-def run_stage2(config, epochs_dict):
-    """Run Stage 2 and save results."""
+def load_features(config, stage_dir=None):
+    """
+    Load saved features.csv. Auto-resolves the latest features directory
+    if ``stage_dir`` is not given.
+    """
+    from utils.io import latest_stage_dir
+
+    if stage_dir is None:
+        stage_dir = latest_stage_dir(config, "features")
+        if stage_dir is None:
+            raise FileNotFoundError(
+                "No features output found. Run `python pipeline.py --features` first."
+            )
+    path = os.path.join(stage_dir, "features.csv")
+    df = pd.read_csv(path)
+    print(f"  Loaded features: {df.shape} from {path}")
+    return df
+
+
+def run(config, epochs_dict=None):
+    """
+    Run Stage 2 feature extraction.
+
+    Writes features.csv, cov_matrices.npz, and run_notes.json into
+    ``config['output_dir']`` (created by ``load_stage_config('features')``).
+    Auto-loads epochs from ``config['input_dir']`` (latest cleaning run)
+    when ``epochs_dict`` is None.
+    """
+    from utils.io import write_stage_notes
+    from stages.cleaning import load_cleaned_epochs
+
     print("\n" + "=" * 60)
     print("STAGE 2: Feature Extraction")
     print("=" * 60)
 
+    cleaning_input = config.get("input_dir")
+    if epochs_dict is None:
+        if cleaning_input is None:
+            raise FileNotFoundError(
+                "No cleaning output found. Run `python pipeline.py --cleaning` first."
+            )
+        epochs_dict = load_cleaned_epochs(config, stage_dir=cleaning_input)
+
     features_df, cov_matrices = extract_all_features(epochs_dict, config)
 
-    # Save
-    output_dir = config["paths"]["output_dir"]
-    os.makedirs(output_dir, exist_ok=True)
+    stage_dir = config["output_dir"]
+    print(f"  Features output dir: {stage_dir}")
 
-    features_path = os.path.join(output_dir, "features.csv")
+    features_path = os.path.join(stage_dir, "features.csv")
     features_df.to_csv(features_path, index=False)
     print(f"\nFeatures saved: {features_path}")
     print(f"Shape: {features_df.shape}")
 
-    # Save covariance matrices
-    cov_path = os.path.join(output_dir, "cov_matrices.npz")
+    cov_path = os.path.join(stage_dir, "cov_matrices.npz")
     np.savez(cov_path, **{
         f"{sub}_{band}": mat
         for sub, bands in cov_matrices.items()
         for band, mat in bands.items()
     })
     print(f"Covariance matrices saved: {cov_path}")
+
+    write_stage_notes(stage_dir, {
+        "stage": "features",
+        "input_cleaning_dir": cleaning_input,
+        "n_subjects": int(features_df.shape[0]),
+        "n_features": int(features_df.shape[1] - 1),
+        "outputs": ["features.csv", "cov_matrices.npz"],
+    })
 
     return features_df, cov_matrices

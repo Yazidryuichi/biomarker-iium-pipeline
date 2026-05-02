@@ -18,13 +18,13 @@ import pandas as pd
 # Biological annotation database
 # Each entry: feature_prefix -> {system, mechanism, ef_relevance, references}
 BIOMARKER_ANNOTATIONS = {
-    # ── Theta/Beta Ratio ──
+    # -- Theta/Beta Ratio --
     "tbr_": {
         "system": "Cortical arousal regulation",
         "mechanism": (
             "TBR reflects the balance between slow-wave (theta, 4-8 Hz) and "
             "fast-wave (beta, 13-30 Hz) activity. Elevated TBR at frontal sites "
-            "indicates cortical hypoarousal — reduced tonic alertness associated "
+            "indicates cortical hypoarousal -- reduced tonic alertness associated "
             "with prefrontal hypofunction."
         ),
         "ef_relevance": (
@@ -41,13 +41,13 @@ BIOMARKER_ANNOTATIONS = {
         ],
     },
 
-    # ── Power Spectral Density ──
+    # -- Power Spectral Density --
     "psd_abs_theta_": {
         "system": "Frontal theta oscillations",
         "mechanism": (
             "Resting-state frontal theta power reflects default-mode cortical "
             "activity. In children, elevated theta at rest is a maturational "
-            "marker — it decreases with age as prefrontal cortex matures."
+            "marker -- it decreases with age as prefrontal cortex matures."
         ),
         "ef_relevance": (
             "Excessive resting theta at frontal sites (Fz, F3, F4) indicates "
@@ -56,7 +56,7 @@ BIOMARKER_ANNOTATIONS = {
         ),
         "direction": "Higher theta -> Lower EF",
         "references": [
-            "Zhou et al. (2023) — N=5,207 children",
+            "Zhou et al. (2023) -- N=5,207 children",
             "Barry et al. (2003) Clinical Neurophysiology",
         ],
     },
@@ -106,7 +106,7 @@ BIOMARKER_ANNOTATIONS = {
         "references": [],
     },
 
-    # ── Frontal Alpha Asymmetry ──
+    # -- Frontal Alpha Asymmetry --
     "faa_": {
         "system": "Motivational approach-withdrawal",
         "mechanism": (
@@ -115,7 +115,7 @@ BIOMARKER_ANNOTATIONS = {
             "Negative values indicate withdrawal tendency."
         ),
         "ef_relevance": (
-            "FAA relates to the 'hot' executive function dimension — emotion "
+            "FAA relates to the 'hot' executive function dimension -- emotion "
             "regulation, reward sensitivity, and motivational control. "
             "May index individual differences in self-regulation strategy."
         ),
@@ -126,7 +126,7 @@ BIOMARKER_ANNOTATIONS = {
         ],
     },
 
-    # ── Alpha Reactivity ──
+    # -- Alpha Reactivity --
     "alpha_reactivity": {
         "system": "Cortical responsiveness",
         "mechanism": (
@@ -145,7 +145,7 @@ BIOMARKER_ANNOTATIONS = {
         ],
     },
 
-    # ── Coherence ──
+    # -- Coherence --
     "coh_": {
         "system": "Functional connectivity",
         "mechanism": (
@@ -167,7 +167,7 @@ BIOMARKER_ANNOTATIONS = {
         ],
     },
 
-    # ── Hjorth Parameters ──
+    # -- Hjorth Parameters --
     "hjorth_activity_": {
         "system": "Signal variance (total power proxy)",
         "mechanism": "Variance of the EEG signal. Proxy for total power.",
@@ -190,7 +190,7 @@ BIOMARKER_ANNOTATIONS = {
         "references": ["Hjorth (1970)"],
     },
 
-    # ── Spectral Entropy ──
+    # -- Spectral Entropy --
     "spectral_entropy_": {
         "system": "Signal regularity / complexity",
         "mechanism": (
@@ -207,12 +207,12 @@ BIOMARKER_ANNOTATIONS = {
         ],
     },
 
-    # ── Phase-Amplitude Coupling ──
+    # -- Phase-Amplitude Coupling --
     "pac_theta_beta_": {
         "system": "Cross-frequency coupling",
         "mechanism": (
             "Modulation of beta amplitude by theta phase. Reflects hierarchical "
-            "organization of neural oscillations — theta sets the temporal window, "
+            "organization of neural oscillations -- theta sets the temporal window, "
             "beta implements the processing within that window."
         ),
         "ef_relevance": (
@@ -226,7 +226,7 @@ BIOMARKER_ANNOTATIONS = {
         ],
     },
 
-    # ── Quantum-Inspired Features ──
+    # -- Quantum-Inspired Features --
     "qepp_": {
         "system": "Non-linear phase coupling (quantum-inspired)",
         "mechanism": (
@@ -234,7 +234,7 @@ BIOMARKER_ANNOTATIONS = {
             "analytic signal representation. Mathematically equivalent to "
             "the real part of coherency, capturing phase-coupling dynamics."
         ),
-        "ef_relevance": "Exploratory — may capture non-linear inter-channel dependencies missed by standard coherence.",
+        "ef_relevance": "Exploratory -- may capture non-linear inter-channel dependencies missed by standard coherence.",
         "direction": "Exploratory",
         "references": ["Alotaibi et al. (2026) Scientific Reports"],
     },
@@ -244,7 +244,7 @@ BIOMARKER_ANNOTATIONS = {
             "Tests whether joint distribution of band powers deviates from "
             "the product of marginals (independence assumption)."
         ),
-        "ef_relevance": "Exploratory — if interference terms predict EF, suggests non-linear oscillatory interactions.",
+        "ef_relevance": "Exploratory -- if interference terms predict EF, suggests non-linear oscillatory interactions.",
         "direction": "Exploratory",
         "references": ["Busemeyer & Bruza (2012) Quantum Models of Cognition"],
     },
@@ -258,6 +258,88 @@ BIOMARKER_ANNOTATIONS = {
         "ef_relevance": "High entropy = channels are highly coupled. Low entropy = channels are independent.",
         "direction": "Exploratory",
         "references": ["Khrennikov & Yamada (2025) Frontiers in Human Neuroscience"],
+    },
+
+    # -- Covariance features (Riemannian geometry) --
+    "cov_delta_": {
+        "system": "Slow-wave spatial covariance (delta, 1-4 Hz)",
+        "mechanism": (
+            "Frequency-band covariance matrices encode the spatial covariance "
+            "structure of EEG in the delta band (1-4 Hz). Off-diagonal elements "
+            "reflect correlated slow-wave activity between channel pairs, "
+            "capturing large-scale synchrony and default-mode coupling."
+        ),
+        "ef_relevance": (
+            "Delta-band covariance between frontal sites is associated with "
+            "thalamocortical rhythms and arousal regulation. Abnormal frontal "
+            "delta covariance may indicate cortical immaturity or hypoarousal "
+            "linked to executive dysfunction in children."
+        ),
+        "direction": "Higher frontal delta covariance -> Lower EF (negative association)",
+        "references": [
+            "Barachant et al. (2012) IEEE Trans Biomed Eng",
+            "Congedo et al. (2017) J Neural Eng -- Riemannian geometry review",
+        ],
+    },
+    "cov_theta_": {
+        "system": "Frontal theta spatial covariance (theta, 4-8 Hz)",
+        "mechanism": (
+            "Theta-band covariance matrices capture synchronized theta oscillations "
+            "across electrode pairs. Frontal theta covariance reflects hippocampal-"
+            "prefrontal communication during working memory encoding and cognitive "
+            "control operations."
+        ),
+        "ef_relevance": (
+            "Frontal midline theta synchrony (reflected in covariance) is a "
+            "well-established neural correlate of working memory load and "
+            "executive control. Higher theta covariance between frontal sites "
+            "during rest may index baseline prefrontal engagement capacity."
+        ),
+        "direction": "Moderate frontal theta covariance -> Better WM and EF",
+        "references": [
+            "Gevins et al. (1997) Cerebral Cortex",
+            "Hsieh & Ranganath (2014) NeuroImage",
+            "Barachant et al. (2012) IEEE Trans Biomed Eng",
+        ],
+    },
+    "cov_alpha_": {
+        "system": "Alpha spatial covariance (alpha, 8-13 Hz)",
+        "mechanism": (
+            "Alpha-band covariance encodes the spatial pattern of alpha "
+            "synchronization across the scalp. Posterior alpha covariance "
+            "reflects visual cortex idling; frontal alpha covariance may "
+            "index top-down inhibitory control over sensory processing."
+        ),
+        "ef_relevance": (
+            "Alpha covariance between frontal and parietal regions relates to "
+            "attentional gating and inhibitory control. Higher fronto-parietal "
+            "alpha covariance is associated with better selective attention, "
+            "a core EF component."
+        ),
+        "direction": "Higher fronto-parietal alpha covariance -> Better attentional control",
+        "references": [
+            "Klimesch (1999) Brain Research Reviews",
+            "Barachant et al. (2012) IEEE Trans Biomed Eng",
+        ],
+    },
+    "cov_beta_": {
+        "system": "Beta spatial covariance (beta, 13-30 Hz)",
+        "mechanism": (
+            "Beta-band covariance reflects cortico-cortical coupling in the "
+            "beta range. Fronto-central beta covariance is linked to motor "
+            "preparation and cognitive control network activity."
+        ),
+        "ef_relevance": (
+            "Frontal beta covariance is associated with executive control "
+            "network integrity. Beta synchrony between prefrontal and motor "
+            "regions supports response inhibition -- a key EF component "
+            "measured by the Flanker task."
+        ),
+        "direction": "Higher fronto-central beta covariance -> Better inhibitory control",
+        "references": [
+            "Engel & Fries (2010) Nature Reviews Neuroscience",
+            "Barachant et al. (2012) IEEE Trans Biomed Eng",
+        ],
     },
 }
 
@@ -275,15 +357,27 @@ def interpret_biomarkers(importance_df):
     """
     annotations = []
 
+    # Condition prefixes added by the feature extraction stage
+    COND_PREFIXES = ("eo_", "ec_")
+
     for _, row in importance_df.iterrows():
         feature = row["feature"]
-        matched = False
 
+        # Strip condition prefix for lookup, keep original name in output
+        lookup = feature
+        cond_label = ""
+        for cp in COND_PREFIXES:
+            if feature.startswith(cp):
+                lookup = feature[len(cp):]
+                cond_label = f" ({cp.rstrip('_').upper()})"
+                break
+
+        matched = False
         for prefix, info in BIOMARKER_ANNOTATIONS.items():
-            if feature.startswith(prefix):
+            if lookup.startswith(prefix):
                 annotations.append({
                     "feature": feature,
-                    "neural_system": info["system"],
+                    "neural_system": info["system"] + cond_label,
                     "mechanism": info["mechanism"],
                     "ef_relevance": info["ef_relevance"],
                     "expected_direction": info.get("direction", "Unknown"),
@@ -321,7 +415,7 @@ def print_biomarker_report(importance_df, top_n=10):
 
     for i, (_, row) in enumerate(annotated.head(top_n).iterrows()):
         rank = i + 1
-        print(f"\n{'─' * 70}")
+        print(f"\n{'-' * 70}")
         print(f"  #{rank}: {row['feature']}")
         print(f"  SHAP importance: {row['mean_abs_shap']:.4f}")
         if "shap_cv" in row:

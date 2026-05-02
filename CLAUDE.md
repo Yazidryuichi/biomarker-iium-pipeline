@@ -1,0 +1,163 @@
+# CLAUDE.md
+
+Operating notes for Claude Code in this repository. Read this before making changes.
+
+## What this project is
+
+A reproducible 4-stage Python pipeline that turns raw resting-state EDF recordings into candidate QEEG biomarkers of executive function (EF) in Indonesian children aged 6-12. Pilot N=28, target N=100. Quantum-inspired feature extraction and quantum-kernel models are opt-in additions to Stages 2 and 4 respectively. See `README.md` for the scientific framing and `METHODS.md` for methodological detail.
+
+## Repository layout
+
+```
+pipeline.py                Slim orchestrator. CLI flags select stages.
+configs/config.yaml        Globals only: paths, recording, random_state. NOT a single source of truth.
+stages/
+  cleaning/
+    config.yaml            Stage-local: input.from, output.to, params (bandpass, ICA, AutoReject)
+    cleaning.py            Stage 1: EDF -> cleaned epochs (HAPPE-compliant ICA flow)
+    __init__.py            re-exports `run`, `load_cleaned_epochs`
+  features/
+    config.yaml            Stage-local: bands, coherence_pairs, wavelet, include_quantum
+    features.py            Stage 2: epochs -> raw primitive features (PSD, coherence, wavelet, Hjorth, entropy, PAC, cov)
+                                    + optional quantum-inspired features (QEPP/QI/tensor)
+    _quantum.py            Helper — QEPP/QI/tensor-network extractors (used by features.py)
+    __init__.py            re-exports `run`, `load_features`
+  engineering/
+    config.yaml            Stage-local: tbr_channels, faa_left/right, posterior_alpha_channels, assessment_date
+    engineering.py         Stage 3: math-derived composites (TBR, FAA, alpha reactivity)
+                                    + behavioural merge + <target>_group binarization
+    __init__.py            re-exports `run`, `load_full_dataset`
+  analysis/
+    config.yaml            Stage-local: cv_folds, cv_repeats, models, scoring, targets, include_qsvm
+    analysis.py            Stage 4: descriptives, correlations (H1-H3), classification (H4), SHAP
+    qsvm_classifier.py     Optional QSVM (pennylane) classifier (used by analysis.py)
+    __init__.py            re-exports `run`
+scripts/
+  quantum_binning_sensitivity.py   Standalone diagnostic: how does QI n_bins affect interference values
+utils/
+  io.py                    load_config (globals), load_stage_config (merged), discover_subjects,
+                           behavioural loaders (load_aufei/load_flanker/load_digit_span with EZ-DDM),
+                           multi-target helpers (get_targets, target_group_col),
+                           per-stage I/O helpers (latest_stage_dir, make_stage_dir, write_stage_notes)
+  bio_interpretation.py    Maps SHAP-ranked features to biological/cognitive descriptions
+data/
+  EDF/                     Per-subject directories (Dxxxxxxx) of EDF files
+  Behavioral/              AUFEI-O, Flanker, Digit Span Excel files
+results/                   Per-stage timestamped subdirs (see "Stage I/O model" below)
+evaluate.py                IMMUTABLE scoring harness; do not edit
+generate_figures.py        Builds README/manuscript figures from latest analysis output
+```
+
+`evaluate.py` still grep-references the pre-refactor filenames (`stage1_cleaning.py`, etc.) — that file is intentionally immutable, do not "fix" it. `run_all.py` has been replaced by `pipeline.py`.
+
+## Stage I/O model (important — this is the architecture)
+
+Each stage owns a folder `stages/<stage>/` with its own `config.yaml` declaring `input.from` (predecessor stage, `raw_edf`, or `behavioral`) and `output.to` (label under `results/`). Stages are **independent**. There is no shared "run dir".
+
+Layout under `results/`:
+```
+results/
+  cleaning/<YYYY-MM-DD_HHMMSS>/cleaned_epochs/, qc.json, run_notes.json
+  features/<YYYY-MM-DD_HHMMSS>/features.csv, cov_matrices.npz, run_notes.json
+  engineering/<YYYY-MM-DD_HHMMSS>/full_dataset.csv, run_notes.json
+  analysis/<YYYY-MM-DD_HHMMSS>/correlations.csv, run_notes.json,
+                               <target>/{ml_results.csv, shap_importance.csv, shap_annotated.csv, figures/}
+```
+
+Stage config schema (`stages/<stage>/config.yaml`):
+```yaml
+input:  { from: <stage_name | "raw_edf" | "behavioral"> }
+output: { to:   <stage_name> }
+params: { ... stage-specific keys ... }
+```
+
+Rules:
+- Every stage call creates a **new timestamped subdirectory** under `results/<output.to>/`. No overwriting. The dir is created eagerly by `load_stage_config`.
+- Every stage **auto-resolves its input** at load time. `utils.io.load_stage_config("<stage>")` returns a merged dict containing `paths`, `recording`, `random_state` (globals), `<stage>: <params>` (stage-local), `input_dir` (resolved predecessor `<latest ts>/`), and `output_dir` (newly created). Stage code reads these directly — no `latest_stage_dir`/`make_stage_dir` calls inside stage modules.
+- Every stage writes a `run_notes.json` recording timestamp, git commit, the input dirs it consumed, and outputs produced. This is the audit trail.
+- `pipeline.py` (full run) runs all 4 stages back-to-back, each loading its own merged config and getting its own timestamp. Within one full-run invocation, stages also pass artifacts in-memory to skip the disk round-trip — but the saved outputs still land in their respective timestamped dirs.
+
+**When you add a new stage or output:**
+- Create `stages/<new_stage>/{config.yaml, <new_stage>.py, __init__.py}`. Wire it into `pipeline.py` via `from stages.<new_stage> import run`.
+- Read params from `config["<stage_name>"]`, globals (`paths`, `recording`, `random_state`) from the top level. `input_dir` and `output_dir` are pre-resolved.
+- Use `write_stage_notes(config["output_dir"], payload)` for the audit trail.
+- Do NOT add new keys like `paths.<stage>_dir` to globals. The only global path keys are `edf_dir`, `behavioral_dir`, `results_dir`.
+
+For multi-target output layouts inside `analysis/`, see "Multi-target architecture" below.
+
+## Feature taxonomy: primitives vs composites
+
+- **Primitives** (Stage 2, `stages/features/features.py`): direct signal-processing outputs from cleaned epochs. PSD per band per channel, raw coherence per pair per band, wavelet, Hjorth, spectral entropy, PAC, frequency-band covariance. These are expensive to compute and stable across experiments — caching them in `features/<ts>/features.csv` is the bottleneck-relieving move.
+- **Composites** (Stage 3, `stages/engineering/engineering.py`): math-derived from primitives. TBR (theta/beta), FAA (log alpha asymmetry), alpha reactivity (EC vs EO), `tbr_frontal_mean`. Cheap to compute from cached primitives — this is where you experiment with new ratios, asymmetry indices, normalisations.
+
+When you want a new derived feature (ratio, normalised by age, cross-band coupling, etc.), add it to `stages/engineering/engineering.py:add_engineered_features`, not the features stage. Re-running engineering on cached features.csv is fast; re-running features on cleaned epochs is slow.
+
+## Quantum-inspired features and models (opt-in)
+
+There is no separate "Stage 5". Quantum-inspired feature extraction and quantum-kernel models are folded into the main pipeline as opt-in additions:
+
+- **`stages/features/config.yaml` → `params.include_quantum: true`** — Stage 2 extracts QEPP, QI, tensor-network features (slow, ~30s/subject extra) from the primary Eyes-Open epoch. Columns are unprefixed (`qepp_*`, `qi_*`, `tn_*`).
+- **`stages/analysis/config.yaml` → `params.include_qsvm: true`** — Stage 4 registers `QSVM_4q_ZZ`, `QSVM_6q_ZZ`, `QSVM_6q_prod` models alongside classical ones. Requires `pennylane`.
+
+When quantum feature columns are present, Stage 4's `get_feature_sets` automatically adds `quantum_only` and `classical_plus_quantum` feature sets — no further config needed. The classical-vs-quantum comparison is then visible in `ml_results.csv` rows with those `feature_set` values.
+
+QSVM bypasses the standard sklearn Pipeline (it does its own PCA + scaling internally). The CV loop in `run_classification` has a small branch for QSVM that only imputes NaNs before fitting.
+
+For the `_quantum_binning_sensitivity` diagnostic, see `scripts/quantum_binning_sensitivity.py` — standalone, not part of the main pipeline.
+
+## Multi-target architecture
+
+`stages/analysis/config.yaml` → `params.targets` is a list. Stage engineering produces a `<target>_group` binary column for every known continuous behavioural measure (median split via `create_ef_groups`). Stage 4 loops over `get_targets(config)`. Output layout depends on count:
+
+- 1 target: `analysis/<ts>/ml_results.csv` (flat)
+- N>1 targets: `analysis/<ts>/<target>/ml_results.csv`
+
+Correlations (target-agnostic, hypothesis-driven across many y's) stay at the stage root. Legacy `ef_group_global/wm/ic` aliases are still written by engineering for backward compatibility but new code should use `<target>_group`. Use `utils.io.get_targets(config)` and `utils.io.target_group_col(target)` rather than reading `analysis.target` directly — the resolver handles both string and list forms (and the legacy `ml.targets` location).
+
+If you add a new behavioural measure, extend `target_candidates` in `stages/engineering/engineering.py:binarize_targets` so a `<col>_group` column gets materialized; otherwise downstream stages skip it with a "binary label missing" message.
+
+## Methodological invariants (do not regress)
+
+These are load-bearing for scientific validity. Do not "simplify" them.
+
+- **Median split inside the CV fold**, never globally. The binarization threshold for `<target>_group` columns at merge time is for descriptive/quantum use only. Stage 4's classification recomputes the threshold on the training fold. Touching this risks target leakage.
+- **`np.trapz` for spectral integration**, not `np.sum`. Per-epoch coherence, not concatenated. Hjorth + wavelet + PAC features must remain present — `evaluate.py` checks for them and the score will drop.
+- **Imputation, scaling, feature selection all inside the sklearn Pipeline**. Never fit on the full dataset before splitting.
+- **`n_jobs=1` for `permutation_test_score` and `RandomizedSearchCV`**. macOS hits OOM with parallel workers cloning the full feature matrix across 8 models. The comment explaining this is in `analysis.py` near the permutation test — keep it.
+- **SHAP per-CV-fold averaging** (`all_shap_values`), not SHAP on a model fit to all 28 subjects. The full-data SHAP is computed only for the summary plot.
+- **FDR (Benjamini-Hochberg)** restricted to pre-specified hypotheses (H1-H3 + planned secondary tests). Do not extend the FDR scope to exploratory feature sweeps without flagging the change explicitly.
+- **ICA fit on a 1 Hz high-pass copy**, then applied to the 0.5 Hz filtered raw. Bad channel interpolation runs **after** ICA, not before. Edge trimming after filtering.
+
+## Conventions
+
+- Python 3, sklearn-style pipelines. Use the existing `_build_models(random_state)` helper rather than instantiating models inline.
+- Optional dependencies (xgboost, lightgbm, catboost, torch, pennylane, shap, autoreject, coffeine, pyriemann) are imported in `try/except ImportError` at point of use and skipped gracefully — preserve this pattern.
+- Print statements go to stdout via the configured logging handler in `pipeline.py`. Long-running stages should log progress; do not silence them.
+- Random seeds: read `config["random_state"]` (top-level global). `pipeline.py` seeds `random`, `numpy`, and `PYTHONHASHSEED` globally. New stochastic code must thread the seed through.
+- File paths inside stages: never read `config["paths"]["<stage>_dir"]` (those keys are gone). Use `config["input_dir"]` and `config["output_dir"]` resolved by `load_stage_config`. Never hardcode `./results/...`.
+- Windows shell: use forward slashes and Unix-style commands; `python` resolves to a working interpreter on the user's machine.
+
+## Running the pipeline
+
+```bash
+python pipeline.py                            # full pipeline (each stage gets its own timestamp)
+python pipeline.py --cleaning                 # stage 1 only
+python pipeline.py --features                 # stage 2 only — auto-loads latest cleaning output
+python pipeline.py --engineering              # stage 3 only — auto-loads latest features output
+python pipeline.py --analysis                 # stage 4 only — auto-loads latest engineering output
+python pipeline.py --include-emotional        # add Happy/Calm/Sad/Scare conditions
+python pipeline.py --subject D0000795         # single-subject debug run
+python pipeline.py --config configs/other.yaml
+```
+
+After editing `stages/analysis/config.yaml:params.targets` (or adding/changing engineered features), re-run `--engineering` once so the new columns appear in `full_dataset.csv` before `--analysis`.
+
+## Documentation files
+
+- `README.md` — scientific framing, study design, hypotheses, citations
+- `METHODS.md` — methodological detail
+- `AI_TRANSPARENCY.md` — AI assistance disclosure (load-bearing for `evaluate.py`'s AI-transparency score)
+- `CONTRIBUTING.md` — contribution guide
+- `PIPELINE_STATUS_REPORT.md` and `docs/progress_report_talenta_*.md` — status snapshots; do not edit unless asked
+
+Do not create new top-level `.md` files unless explicitly requested. Update existing docs in place.

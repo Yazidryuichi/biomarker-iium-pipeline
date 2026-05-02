@@ -38,15 +38,52 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "docs", "figures")
 
 
 def load_results_from_csv():
-    """Load results from pipeline output CSVs."""
+    """
+    Load results from the latest analysis stage output. Quantum-vs-classical
+    comparison is now part of ml_results.csv (when features.include_quantum
+    was enabled at extraction time): rows with feature_set in
+    {classical_only, quantum_only, classical_plus_quantum}.
+
+    For multi-target runs, reads from the first target subdirectory.
+    """
     import pandas as pd
-    results_dir = os.path.join(os.path.dirname(__file__), "results")
+    sys.path.insert(0, os.path.dirname(__file__))
+    from utils.io import load_stage_config, latest_stage_dir, get_targets
 
-    ml = pd.read_csv(os.path.join(results_dir, "ml_results.csv"))
-    shap = pd.read_csv(os.path.join(results_dir, "shap_importance.csv"))
+    config = load_stage_config(
+        "analysis",
+        globals_path=os.path.join(os.path.dirname(__file__), "configs/config.yaml"),
+        create_output_dir=False,
+    )
+    targets = get_targets(config)
+    multi = len(targets) > 1
+    primary = targets[0]
 
-    quantum_path = os.path.join(results_dir, "quantum_vs_classical.csv")
-    quantum = pd.read_csv(quantum_path) if os.path.exists(quantum_path) else None
+    analysis_dir = latest_stage_dir(config, "analysis")
+    if analysis_dir is None:
+        raise FileNotFoundError("No analysis output found. Run `python pipeline.py --analysis` first.")
+    target_dir = os.path.join(analysis_dir, primary) if multi else analysis_dir
+
+    ml = pd.read_csv(os.path.join(target_dir, "ml_results.csv"))
+    shap = pd.read_csv(os.path.join(target_dir, "shap_importance.csv"))
+
+    # Quantum-vs-classical: synthesise the legacy DataFrame shape from ml_results
+    # (feature_set in {classical, quantum, combined}) when quantum sets exist.
+    quantum = None
+    fs_present = set(ml["feature_set"].unique())
+    if {"all_features", "quantum_only", "classical_plus_quantum"} & fs_present:
+        rename = {
+            "all_features":           "classical",
+            "conventional_qeeg":      "classical",
+            "quantum_only":           "quantum",
+            "classical_plus_quantum": "combined",
+        }
+        sub = ml[ml["feature_set"].isin(rename)].copy()
+        sub["feature_set"] = sub["feature_set"].map(rename)
+        # For each renamed bucket, keep the best-performing model row
+        quantum = (sub.sort_values("balanced_accuracy", ascending=False)
+                       .drop_duplicates("feature_set")
+                       .reset_index(drop=True))
 
     return ml, shap, quantum
 

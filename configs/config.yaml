@@ -1,11 +1,22 @@
-# Biomarker_IIUM Analysis Pipeline Configuration
-# ================================================
+# Biomarker_IIUM Analysis Pipeline — Globals
+# ============================================
+# Stage-specific config lives in stages/<stage>/config.yaml. This file
+# holds only values that more than one stage reads (paths, recording
+# parameters, the global random seed).
+#
+# Stage I/O model
+# ---------------
+# Each stage declares input.from and output.to in its own config and
+# writes to results/<output.to>/<YYYY-MM-DD_HHMMSS>/. Predecessors are
+# auto-resolved to the latest sibling subdir at run time. There is no
+# shared "run dir".
 
 paths:
-  edf_dir: "./EF_Biomarker/EDF_Files"
-  behavioral_dir: "./data_root"
-  output_dir: "./results"
-  figures_dir: "./figures"
+  # Input data
+  edf_dir: "./data/EDF"
+  behavioral_dir: "./data"
+  # Output root: each stage writes to results/<stage>/<timestamp>/
+  results_dir: "./results"
 
 recording:
   sfreq: 250  # Hz
@@ -36,56 +47,5 @@ recording:
       - 3_Sad
       - 4_Scare
 
-cleaning:
-  bandpass: [0.5, 45.0]
-  notch: 50.0
-  epoch_duration: 2.0  # seconds
-  epoch_overlap: 0.0
-  ica_method: "fastica"
-  ica_n_components: 14  # n_channels - 1
-  # Conservative rejection (SCCN recommendation for small N)
-  max_reject_pct: 0.30  # reject max 30% of epochs
-  bad_channel_threshold: 3.0  # z-score
-
-features:
-  # Frequency bands
-  bands:
-    delta: [1, 4]
-    theta: [4, 8]
-    alpha: [8, 13]
-    beta: [13, 30]
-  # TBR channels
-  tbr_channels: ["Fz", "F3", "F4", "Cz"]
-  # FAA channels
-  faa_left: "F3"
-  faa_right: "F4"
-  # Coherence pairs
-  coherence_pairs:
-    - ["Fz", "Pz"]
-    - ["F3", "P3"]
-    - ["F4", "P4"]
-  # Wavelet parameters
-  wavelet: "cmor1.5-1.0"
-  wavelet_n_freqs: 30
-  wavelet_freq_range: [2, 45]
-
-ml:
-  cv_folds: 5
-  cv_repeats: 10
-  random_state: 42
-  test_size: 0.2
-  models:
-    - RandomForest
-    - XGBoost
-    - LightGBM
-    - CatBoost
-    - SVM
-    - KNN
-    - MLP
-    - CNN-LSTM
-  scoring:
-    - balanced_accuracy
-    - f1
-    - roc_auc
-    - sensitivity
-    - specificity
+# Global RNG seed (numpy, random, PYTHONHASHSEED, ICA, sklearn CV).
+random_state: 42
