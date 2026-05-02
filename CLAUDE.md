@@ -147,10 +147,44 @@ python pipeline.py --engineering              # stage 3 only — auto-loads late
 python pipeline.py --analysis                 # stage 4 only — auto-loads latest engineering output
 python pipeline.py --include-emotional        # add Happy/Calm/Sad/Scare conditions
 python pipeline.py --subject D0000795         # single-subject debug run
-python pipeline.py --config configs/other.yaml
+python pipeline.py --config configs/other.yaml   # override globals path
 ```
 
 After editing `stages/analysis/config.yaml:params.targets` (or adding/changing engineered features), re-run `--engineering` once so the new columns appear in `full_dataset.csv` before `--analysis`.
+
+## Iteration workflow — which stages to re-run
+
+The cache discipline is: cleaning is the slow one, features is moderate, engineering is fast, analysis is fast. Always start from the cheapest stage that covers the change.
+
+| What changed | Run from |
+|---|---|
+| Raw EDF data, ICA / AutoReject / bandpass params (`stages/cleaning/config.yaml`) | `--cleaning` (then everything downstream) |
+| Bands, coherence pairs, wavelet, `include_quantum` (`stages/features/config.yaml`) | `--features` (cleaning cached) |
+| TBR / FAA / alpha-reactivity definitions, `assessment_date`, behavioural files (`stages/engineering/config.yaml` or `data/Behavioral/`) | `--engineering` (cleaning + features cached) |
+| `targets` list, models, `cv_folds`, `cv_repeats`, scoring, `include_qsvm` (`stages/analysis/config.yaml`) | `--analysis` only |
+| Globals (`paths`, `recording`, `random_state` in `configs/config.yaml`) | full `python pipeline.py` (recording params would invalidate cleaning) |
+
+Each invocation creates a new `results/<stage>/<ts>/` and the next stage will auto-pick it. No manual flag plumbing.
+
+## Configuration map (where each knob lives)
+
+```
+configs/config.yaml                  paths (edf_dir, behavioral_dir, results_dir),
+                                     recording (sfreq, channels, conditions),
+                                     random_state
+stages/cleaning/config.yaml          bandpass, notch, epoch_duration/overlap,
+                                     ica_method/n_components, max_reject_pct,
+                                     bad_channel_threshold
+stages/features/config.yaml          bands, coherence_pairs, wavelet*,
+                                     include_quantum
+stages/engineering/config.yaml       tbr_channels, faa_left/right,
+                                     posterior_alpha_channels, assessment_date
+stages/analysis/config.yaml          cv_folds, cv_repeats, test_size,
+                                     targets[], models[], scoring[],
+                                     include_qsvm
+```
+
+To add a knob to a stage, put it in `params:` of that stage's config. To add a knob shared by multiple stages, put it at the global config root and read via `config["<key>"]`.
 
 ## Documentation files
 
