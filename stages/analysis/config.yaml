@@ -10,7 +10,7 @@ output:
   to: analysis
 
 params:
-  cv_folds: 2
+  cv_folds: 5
   cv_repeats: 5
   test_size: 0.2
   # Quantum-kernel SVM models (QSVM_4q_ZZ, QSVM_6q_ZZ, QSVM_6q_prod).
@@ -45,8 +45,8 @@ params:
   #   BW_Span         — backward digit span score
   targets:
     - Global_EF
-    - WM_score
-    - IC_score
+    # - WM_score
+    # - IC_score
     # - CF_score
     # - P_score
     # - SF_score
@@ -62,15 +62,19 @@ params:
   # --- Models (comment out any line to disable that model) ---
   # CNN-LSTM requires PyTorch and runs in a separate loop regardless of
   # position in this list (sklearn joblib + macOS hangs).
+  # Slimmed lineup for N=26: dropped LightGBM (degenerated to 0.5 across all
+  # feature sets in prior runs — its leaf-wise growth needs more samples than
+  # we have), KNN/MLP (unstable on tiny N), CNN-LSTM (insufficient data).
+  # Re-enable any line if you want a wider sweep.
   models:
     - RandomForest
-    - XGBoost       # requires: pip install xgboost
-    - LightGBM      # requires: pip install lightgbm
-    - CatBoost      # requires: pip install catboost
     - SVM
-    - KNN
-    - MLP
-    - CNN-LSTM      # requires: pip install torch
+    # - XGBoost     # requires: pip install xgboost
+    # - CatBoost    # requires: pip install catboost
+    # - LightGBM    # requires: pip install lightgbm
+    # - KNN
+    # - MLP
+    # - CNN-LSTM    # requires: pip install torch
 
   scoring:
     - balanced_accuracy
@@ -78,3 +82,31 @@ params:
     - roc_auc
     - sensitivity
     - specificity
+
+  # --- Feature sets to evaluate ---
+  # Comment out a line to skip that feature set. Leave the whole list empty
+  # or remove this key to evaluate every set discovered by analysis.py.
+  #
+  # Available sets (auto-built in stages/analysis/analysis.py:get_feature_sets):
+  #   conventional_qeeg              — PSD + TBR + FAA + coherence (EO+EC)
+  #   conventional_plus_advanced     — + wavelet + Hjorth + entropy + PAC
+  #   covariance_only                — frequency-band covariance matrices
+  #   all_features                   — everything classical
+  #   *_eo / *_ec                    — Eyes-Open / Eyes-Closed only variants
+  #   quantum_only                   — only when stages/features include_quantum=true
+  #   classical_plus_quantum         — classical + quantum (same precondition)
+  feature_sets:
+    - conventional_qeeg
+    - conventional_qeeg_ec
+    - covariance_only_ec
+    - all_features
+    # - conventional_plus_advanced
+    # - covariance_only
+    # - conventional_qeeg_eo
+    # - conventional_plus_advanced_eo
+    # - conventional_plus_advanced_ec
+    # - covariance_only_eo
+    # - all_features_eo
+    # - all_features_ec
+    # - quantum_only            # requires features.include_quantum=true
+    # - classical_plus_quantum  # requires features.include_quantum=true

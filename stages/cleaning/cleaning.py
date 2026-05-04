@@ -326,7 +326,11 @@ def clean_single_file(filepath, config, subject_id, condition):
         qc["mean_amplitude_uv"] = 0
         qc["std_amplitude_uv"] = 0
 
-    qc["status"] = "OK" if len(epochs_clean) >= 10 else "LOW_EPOCH_COUNT"
+    min_epochs = config["cleaning"].get("min_epochs", 10)
+    if len(epochs_clean) < min_epochs:
+        qc["status"] = "LOW_EPOCH_COUNT"
+    else:
+        qc["status"] = "OK"
 
     return epochs_clean, qc
 
@@ -411,22 +415,31 @@ def run(config, subjects, conditions=None):
                 epochs, qc = clean_single_file(
                     filepath, config, subject_id, condition
                 )
-                all_epochs[(subject_id, condition)] = epochs
 
-                # Save cleaned epochs
-                epoch_fname = f"{subject_id}_{condition}-epo.fif"
-                epochs.save(
-                    os.path.join(output_dir, epoch_fname),
-                    overwrite=True,
-                    verbose=False,
-                )
+                if qc["status"] == "LOW_EPOCH_COUNT":
+                    # Skip saving — file will be invisible to downstream stages
+                    print(
+                        f"  DROP: {qc['n_epochs_after_reject']} epochs "
+                        f"(<{config['cleaning'].get('min_epochs', 10)} floor), "
+                        f"{qc['pct_epochs_dropped']:.0%} rejected"
+                    )
+                else:
+                    all_epochs[(subject_id, condition)] = epochs
 
-                print(
-                    f"  OK: {qc['n_epochs_after_reject']} epochs "
-                    f"({qc['pct_epochs_dropped']:.0%} rejected), "
-                    f"{qc['n_bad_channels']} bad ch, "
-                    f"{qc['n_ica_excluded']} ICA excluded"
-                )
+                    # Save cleaned epochs
+                    epoch_fname = f"{subject_id}_{condition}-epo.fif"
+                    epochs.save(
+                        os.path.join(output_dir, epoch_fname),
+                        overwrite=True,
+                        verbose=False,
+                    )
+
+                    print(
+                        f"  OK: {qc['n_epochs_after_reject']} epochs "
+                        f"({qc['pct_epochs_dropped']:.0%} rejected), "
+                        f"{qc['n_bad_channels']} bad ch, "
+                        f"{qc['n_ica_excluded']} ICA excluded"
+                    )
 
             except Exception as e:
                 qc = {

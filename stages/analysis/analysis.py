@@ -223,6 +223,17 @@ def get_feature_sets(df, config):
         feature_sets["quantum_only"] = quantum
         feature_sets["classical_plus_quantum"] = list(dict.fromkeys(all_features + quantum))
 
+    # Optional config-driven filter: keep only sets listed in
+    # analysis.feature_sets (strip inline YAML comments). Unknown names are
+    # skipped with a warning so a typo doesn't silently produce empty results.
+    requested = config.get("analysis", {}).get("feature_sets")
+    if requested:
+        requested = [s.split("#")[0].strip() for s in requested if s]
+        unknown = [s for s in requested if s not in feature_sets]
+        if unknown:
+            print(f"  [WARN] feature_sets not recognised, skipping: {unknown}")
+        feature_sets = {k: v for k, v in feature_sets.items() if k in requested}
+
     return feature_sets
 
 

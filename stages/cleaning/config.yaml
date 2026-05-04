@@ -19,3 +19,7 @@ params:
   # Conservative rejection (SCCN recommendation for small N)
   max_reject_pct: 0.30      # reject max 30% of epochs
   bad_channel_threshold: 3.0  # z-score
+  # Drop subject-condition entirely if surviving epochs < this floor.
+  # Severely degraded recordings (e.g. 29 epochs after 80% rejection) bias
+  # downstream PSD/coherence estimates; better to exclude than dilute.
+  min_epochs: 60
