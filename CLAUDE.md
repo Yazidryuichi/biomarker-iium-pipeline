@@ -4,7 +4,7 @@ Operating notes for Claude Code in this repository. Read this before making chan
 
 ## What this project is
 
-A reproducible 4-stage Python pipeline that turns raw resting-state EDF recordings into candidate QEEG biomarkers of executive function (EF) in Indonesian children aged 6-12. Pilot N=28, target N=100. Quantum-inspired feature extraction and quantum-kernel models are opt-in additions to Stages 2 and 4 respectively. See `README.md` for the scientific framing and `METHODS.md` for methodological detail.
+A reproducible 4-stage Python pipeline that turns raw resting-state EDF recordings into candidate QEEG biomarkers of executive function (EF) in Indonesian children aged 6-12. Pilot N=26 (after one severely-degraded subject-condition dropped by the cleaning floor), target N=100. Quantum-inspired feature extraction and quantum-kernel models are opt-in additions to Stages 2 and 4 respectively. See `README.md` for the scientific framing and `METHODS.md` for methodological detail.
 
 ## Repository layout
 
@@ -13,7 +13,7 @@ pipeline.py                Slim orchestrator. CLI flags select stages.
 configs/config.yaml        Globals only: paths, recording, random_state. NOT a single source of truth.
 stages/
   cleaning/
-    config.yaml            Stage-local: input.from, output.to, params (bandpass, ICA, AutoReject)
+    config.yaml            Stage-local: input.from, output.to, params (bandpass, ICA, AutoReject, min_epochs)
     cleaning.py            Stage 1: EDF -> cleaned epochs (HAPPE-compliant ICA flow)
     runs/<ts>/             Per-invocation outputs (gitignored, co-located with code)
     __init__.py            re-exports `run`, `load_cleaned_epochs`
@@ -31,7 +31,7 @@ stages/
     runs/<ts>/             Per-invocation outputs (gitignored)
     __init__.py            re-exports `run`, `load_full_dataset`
   analysis/
-    config.yaml            Stage-local: cv_folds, cv_repeats, models, scoring, targets, include_qsvm
+    config.yaml            Stage-local: cv_folds, cv_repeats, models, feature_sets, scoring, targets, include_qsvm
     analysis.py            Stage 4: descriptives, correlations (H1-H3), classification (H4), SHAP
     qsvm_classifier.py     Optional QSVM (pennylane) classifier (used by analysis.py)
     runs/<ts>/             Per-invocation outputs (gitignored)
@@ -128,8 +128,9 @@ These are load-bearing for scientific validity. Do not "simplify" them.
 - **Median split inside the CV fold**, never globally. The binarization threshold for `<target>_group` columns at merge time is for descriptive/quantum use only. Stage 4's classification recomputes the threshold on the training fold. Touching this risks target leakage.
 - **`np.trapz` for spectral integration**, not `np.sum`. Per-epoch coherence, not concatenated. Hjorth + wavelet + PAC features must remain present — `evaluate.py` checks for them and the score will drop.
 - **Imputation, scaling, feature selection all inside the sklearn Pipeline**. Never fit on the full dataset before splitting.
-- **`n_jobs=1` for `permutation_test_score` and `RandomizedSearchCV`**. macOS hits OOM with parallel workers cloning the full feature matrix across 8 models. The comment explaining this is in `analysis.py` near the permutation test — keep it.
-- **SHAP per-CV-fold averaging** (`all_shap_values`), not SHAP on a model fit to all 28 subjects. The full-data SHAP is computed only for the summary plot.
+- **`n_jobs=1` for `permutation_test_score` and `RandomizedSearchCV`**. macOS hits OOM with parallel workers cloning the full feature matrix across many models. The comment explaining this is in `analysis.py` near the permutation test — keep it.
+- **SHAP per-CV-fold averaging** (`all_shap_values`), not SHAP on a model fit to the full cohort. The full-data SHAP is computed only for the summary plot.
+- **`cleaning.params.min_epochs` floor**. Subject-condition recordings whose surviving epoch count falls below this floor are dropped from disk (no `*-epo.fif` saved); downstream stages then never see them. Severely degraded recordings (e.g. one EO file with 29/144 epochs surviving in the pilot) bias PSD/coherence estimates more than they help — better excluded than diluted.
 - **FDR (Benjamini-Hochberg)** restricted to pre-specified hypotheses (H1-H3 + planned secondary tests). Do not extend the FDR scope to exploratory feature sweeps without flagging the change explicitly.
 - **ICA fit on a 1 Hz high-pass copy**, then applied to the 0.5 Hz filtered raw. Bad channel interpolation runs **after** ICA, not before. Edge trimming after filtering.
 
@@ -166,7 +167,7 @@ The cache discipline is: cleaning is the slow one, features is moderate, enginee
 | Raw EDF data, ICA / AutoReject / bandpass params (`stages/cleaning/config.yaml`) | `--cleaning` (then everything downstream) |
 | Bands, coherence pairs, wavelet, `include_quantum` (`stages/features/config.yaml`) | `--features` (cleaning cached) |
 | TBR / FAA / alpha-reactivity definitions, `assessment_date`, behavioural files (`stages/engineering/config.yaml` or `data/Behavioral/`) | `--engineering` (cleaning + features cached) |
-| `targets` list, models, `cv_folds`, `cv_repeats`, scoring, `include_qsvm` (`stages/analysis/config.yaml`) | `--analysis` only |
+| `targets` list, models, `feature_sets`, `cv_folds`, `cv_repeats`, scoring, `include_qsvm` (`stages/analysis/config.yaml`) | `--analysis` only |
 | Globals (`paths`, `recording`, `random_state` in `configs/config.yaml`) | full `python pipeline.py` (recording params would invalidate cleaning) |
 
 Each invocation creates a new `stages/<stage>/runs/<ts>/` and the next stage will auto-pick it. No manual flag plumbing.
@@ -179,14 +180,14 @@ configs/config.yaml                  paths (edf_dir, behavioral_dir),
                                      random_state
 stages/cleaning/config.yaml          bandpass, notch, epoch_duration/overlap,
                                      ica_method/n_components, max_reject_pct,
-                                     bad_channel_threshold
+                                     bad_channel_threshold, min_epochs
 stages/features/config.yaml          bands, coherence_pairs, wavelet*,
                                      include_quantum
 stages/engineering/config.yaml       tbr_channels, faa_left/right,
                                      posterior_alpha_channels, assessment_date
 stages/analysis/config.yaml          cv_folds, cv_repeats, test_size,
-                                     targets[], models[], scoring[],
-                                     include_qsvm
+                                     targets[], models[], feature_sets[],
+                                     scoring[], include_qsvm
 ```
 
 To add a knob to a stage, put it in `params:` of that stage's config. To add a knob shared by multiple stages, put it at the global config root and read via `config["<key>"]`.

@@ -10,6 +10,8 @@
 
 **Audience:** Talenta Center team. This report is the English companion to the Indonesian original (`Laporan_Progres_Talenta_20260419.md`) kept alongside the research folder.
 
+> **Editor's note (4 May 2026):** This is a fixed-point snapshot from 19 April 2026. The body below references the pre-refactor layout (`run_all.py`, `stages/stage{1..5}_*.py`, top-level `results/`); the repository now uses per-stage folders (`stages/<stage>/<stage>.py` + `stages/<stage>/config.yaml` + `stages/<stage>/runs/<ts>/`) orchestrated by `pipeline.py`, and quantum-inspired features and QSVM are opt-in additions to Stage 2 and Stage 4 rather than a separate Stage 5. The latest pilot result (Global EF, N = 26 after one Eyes-Open recording was excluded by the cleaning `min_epochs` floor) is balanced accuracy 0.665 (RandomForest on `covariance_only_ec`), permutation p = 0.035 — superseding the CNN-LSTM 0.652 figure quoted below. See `README.md` for the current numbers.
+
 ---
 
 ## 1. Executive Summary

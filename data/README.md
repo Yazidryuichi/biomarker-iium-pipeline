@@ -11,7 +11,7 @@ EEG and behavioral data files contain identifiable participant information (chil
 
 ```
 data/
-  EDF_Files/
+  EDF/
     D0000795/
       X_M_X_Name_IGS_Eyes_Open.edf
       X_M_X_Name_IGS_Eyes_Closed.edf
@@ -23,21 +23,22 @@ data/
       ...
     (28 subject folders total)
 
-  AUFEI-O_Cleaned.xlsx      (28 rows, AUFEI behavioral scores)
-  Flanker_Test_Pilot.xlsx   (28 rows, Flanker task results)
-  Digit_Span.xlsx           (28 rows, forward + backward digit span)
+  Behavioral/
+    AUFEI-O_Cleaned.xlsx      (28 rows, AUFEI behavioral scores)
+    Flanker_Test_Pilot.xlsx   (28 rows, Flanker task results)
+    Digit_Span.xlsx           (28 rows, forward + backward digit span)
 ```
 
 3. Verify by running:
    ```bash
-   python run_all.py --subject D0000795
+   python pipeline.py --subject D0000795
    ```
 
 ## Data description
 
 | File | Content | N |
 |------|---------|---|
-| EDF_Files/ | 15-channel EEG at 250 Hz, EDF format | 28 subjects x 6 conditions |
-| AUFEI-O_Cleaned.xlsx | Executive function questionnaire scores (WM, IC, CF, P, SF domains) | 28 |
-| Flanker_Test_Pilot.xlsx | Fish Flanker task (RT, accuracy, flanker effect, DDM parameters) | 28 |
-| Digit_Span.xlsx | Forward + backward digit span scores | 28 |
+| EDF/ | 15-channel EEG at 250 Hz, EDF format | 28 subjects x 2-6 conditions (primary EO + EC; emotional opt-in via `--include-emotional`) |
+| Behavioral/AUFEI-O_Cleaned.xlsx | Executive function questionnaire scores (WM, IC, CF, P, SF domains, Global EF) | 28 |
+| Behavioral/Flanker_Test_Pilot.xlsx | Fish Flanker task (RT, accuracy, flanker effect, EZ-DDM parameters) | 28 |
+| Behavioral/Digit_Span.xlsx | Forward + backward digit span scores | 28 |

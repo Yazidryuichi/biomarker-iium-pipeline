@@ -17,7 +17,7 @@
 
 4. Test on one subject:
    ```bash
-   python run_all.py --subject D0000795
+   python pipeline.py --subject D0000795
    ```
 
 ### Workflow
@@ -71,21 +71,25 @@ The `.gitignore` is configured to block common data files, but always verify.
 
 If you want to add a new analysis (e.g., a new feature extraction method):
 
-1. Add the function to the appropriate stage file (`stages/stage2_features.py` for features)
-2. Integrate it into the extraction pipeline (call it from `extract_all_features()`)
+1. Add the function to the appropriate stage module (`stages/features/features.py` for raw signal-processing primitives, `stages/engineering/engineering.py` for math-derived composites)
+2. Integrate it into the extraction or engineering pipeline (call it from `extract_all_features()` or `add_engineered_features()`)
 3. Add any new dependencies to `requirements.txt`
-4. Test on a single subject before running full pipeline
+4. Test on a single subject (`python pipeline.py --subject D0000795`) before running full pipeline
 5. Document what the feature measures and cite the method
+6. Re-run **only the cheapest stage that covers your change**: engineering composites are derivable from cached features.csv (fast); raw primitives require re-running the features stage on cleaned epochs (moderate); preprocessing changes require re-running cleaning (slow).
 
 ## Pipeline configuration
 
-All parameters are in `configs/config.yaml`. If you need to change:
-- Frequency bands
-- Filter settings
-- ML model hyperparameters
-- Channel selections
+Each stage owns a config file. Globals (`paths`, `recording`, `random_state`) live at the repository root in `configs/config.yaml`. Stage-specific knobs live with the stage code:
 
-Edit the config file rather than hardcoding values in the scripts.
+| Stage | Config | Typical knobs |
+|---|---|---|
+| 1 cleaning | `stages/cleaning/config.yaml` | bandpass, notch, ICA, AutoReject, `min_epochs` floor |
+| 2 features | `stages/features/config.yaml` | frequency bands, coherence_pairs, wavelet, `include_quantum` |
+| 3 engineering | `stages/engineering/config.yaml` | tbr_channels, faa_left/right, posterior_alpha_channels, assessment_date |
+| 4 analysis | `stages/analysis/config.yaml` | targets, models, feature_sets, cv_folds, cv_repeats, `include_qsvm` |
+
+Edit the relevant stage config rather than hardcoding values in the scripts. Re-running a stage creates a new timestamped subdir under `stages/<stage>/runs/<ts>/` — outputs are never overwritten.
 
 ## Questions?
 

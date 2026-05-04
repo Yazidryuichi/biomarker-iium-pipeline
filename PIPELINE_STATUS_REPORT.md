@@ -5,6 +5,15 @@
 **Repo:** https://github.com/Ladykiller101/biomarker-iium-pipeline (private)
 **Your access:** Invited as collaborator (`dndyzz`) — please accept the invite if you haven't.
 
+> **NOTE (4 May 2026):** This snapshot is preserved as a historical record of the state on 7 April 2026. Several details below are now superseded:
+>
+> - File layout: `run_all.py` and `stages/stage{1..5}_*.py` were refactored into per-stage folders (`stages/cleaning/cleaning.py`, etc.) with per-stage configs. Use `python pipeline.py` instead of `python run_all.py`. Outputs land under `stages/<stage>/runs/<ts>/`, not `results/`.
+> - There is no separate Stage 5: quantum-inspired feature extraction is opt-in inside Stage 2 (`features.include_quantum`), and quantum-kernel SVM is opt-in inside Stage 4 (`analysis.include_qsvm`).
+> - Active model lineup is config-driven (`stages/analysis/config.yaml: models[]`); the paper-ready default is RandomForest + SVM. CNN-LSTM and other heavy models remain available but are off by default at N = 26.
+> - Latest pilot results (Global EF, N = 26): RandomForest on `covariance_only_ec` reaches BA 0.665 with permutation p = 0.035; see `README.md` and the latest `stages/analysis/runs/<ts>/` directory.
+>
+> The body of this report below is left untouched.
+
 ---
 
 ## 1. What Was Done (This Session)

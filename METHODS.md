@@ -29,6 +29,10 @@ EOG component identification via correlation with Fp1/Fp2. Maximum 3 components 
 
 AutoReject (Jas et al., 2017) computes data-driven peak-to-peak thresholds. Fallback: 150 uV. Maximum 30% epoch rejection rate enforced; if exceeded, threshold relaxed by 1.5x.
 
+### 1.5 Subject-Condition Floor
+
+After per-epoch rejection, any subject-condition recording whose surviving epoch count falls below `cleaning.params.min_epochs` (default 60) is **dropped from disk** — no `*-epo.fif` is written and downstream stages never see it. Severely degraded recordings (in the pilot, one Eyes-Open recording with 29/144 epochs surviving) bias PSD and coherence estimates more than they help; excluding the affected condition while keeping the same subject's other condition is the conservative choice.
+
 ## 2. Feature Extraction (Stage 2)
 
 ### 2.1 Power Spectral Density (PSD)
@@ -155,25 +159,29 @@ Feature selection k is adaptive: `k = max(5, min(15, n_features // 10))`.
 
 ### 3.3 Models
 
+The full set of models implemented in `_build_models()` is listed below; the **active lineup is selected via `stages/analysis/config.yaml: models[]`**, and feature sets via `feature_sets[]`. The current paper-ready default is RandomForest + SVM only — chosen because at N = 26 a tighter lineup is more honestly interpretable than an eight-model sweep. Boosted trees (XGBoost, CatBoost) and others remain available behind a single config edit.
+
 | Model | Key Parameters | Class Weighting |
 |-------|---------------|-----------------|
-| Random Forest | n_estimators=100, max_depth=3 | balanced |
+| RandomForest | n_estimators=100, max_depth=3 | balanced |
+| SVM (RBF) | C=1.0 | balanced |
 | XGBoost | n_estimators=50, max_depth=3, lr=0.1 | via scale_pos_weight |
 | LightGBM | n_estimators=100, max_depth=3, lr=0.1 | via is_unbalance |
 | CatBoost | iterations=100, depth=3, lr=0.1 | auto |
-| SVM (RBF) | C=1.0 | balanced |
 | KNN | k=5 | N/A |
 | MLP | (64, 32), early_stopping | N/A |
+| CNN-LSTM | Conv1D(16) -> LSTM(32) -> FC(1) | BCEWithLogitsLoss |
+| QSVM_4q_ZZ / 6q_ZZ / 6q_prod | pennylane kernel-SVM | N/A — opt-in |
 
 ### 3.4 Cross-Validation
 
-**Main evaluation:** RepeatedStratifiedKFold (5 folds x 10 repeats = 50 evaluations per model).
+**Main evaluation:** RepeatedStratifiedKFold (`cv_folds=5`, `cv_repeats=5` = 25 evaluations per model in the current configuration). Fold-internal median split of the continuous target prevents threshold leakage.
 
-**Hyperparameter tuning:** Nested CV with RandomizedSearchCV (inner: 3 folds, outer: 5x5).
+**Hyperparameter tuning:** Nested CV with RandomizedSearchCV on the best-scoring feature set only (inner: 3 folds, outer: 5 x 5; `n_iter=20`; `n_jobs=1` to avoid joblib OOM under macOS).
 
 ### 3.5 Statistical Validation
 
-**Permutation test:** 500 permutations of label shuffling to establish null distribution. Reported p-value tests H0: "model accuracy = chance."
+**Permutation test:** 200 permutations of label shuffling on the best-scoring (feature_set, model) pair to establish a null distribution. Reported p-value tests H0: "model accuracy = chance."
 
 **Bootstrap CI:** 1000 bootstrap resamples of CV balanced accuracy scores. 95% CI reported via percentile method.
 
@@ -200,7 +208,9 @@ stability_CV = std(|shap_k|) / mean(|shap_k|)
 
 Features with CV < 0.5 labeled "stable"; otherwise "unstable."
 
-## 4. Quantum-Inspired Features (Stage 5, Exploratory)
+## 4. Quantum-Inspired Features (opt-in addition to Stage 2 / Stage 4)
+
+Activated via `stages/features/config.yaml: include_quantum: true` (extraction) and `stages/analysis/config.yaml: include_qsvm: true` (kernel-SVM models). When the quantum feature columns (`qepp_*`, `qi_*`, `tn_*`) are present, Stage 4's `get_feature_sets` automatically adds `quantum_only` and `classical_plus_quantum` feature sets to the comparison. There is no separate "Stage 5".
 
 ### 4.1 QEPP (Quantum Entangled Particles Pattern)
 

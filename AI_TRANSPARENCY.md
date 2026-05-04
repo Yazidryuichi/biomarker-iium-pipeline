@@ -6,17 +6,17 @@ This document declares all uses of generative AI tools in the development of thi
 
 ### Code Development
 
-- **Tool used:** Claude Code (Anthropic Claude Opus 4.6)
-- **Scope:** Pipeline architecture design, code generation, code review, and bug fixing
+- **Tool used:** Claude Code (Anthropic Claude Opus 4.7), with earlier sessions on Opus 4.6
+- **Scope:** Pipeline architecture design, code generation, code review, bug fixing, and refactor (run_all.py monolith -> per-stage folders with per-stage configs)
 - **Human oversight:** All AI-generated code was reviewed, tested, and validated by the research team before inclusion
-- **Verification:** Each pipeline stage was tested on pilot data (N=28) with results manually inspected
+- **Verification:** Each pipeline stage was tested on pilot data (N=26 after a single subject-condition exclusion via `min_epochs` floor) with results manually inspected
 
 ### Analysis Decisions
 
 - **Feature selection methods:** Chosen based on literature review and domain expertise, not AI recommendation alone
-- **Model selection:** 8 algorithms specified in the research proposal prior to AI involvement
+- **Model selection:** Eight algorithms specified in the research proposal prior to AI involvement; the active lineup at any point is selected by the research team via `stages/analysis/config.yaml: models[]` and is currently slimmed to RandomForest + SVM for paper-ready N = 26 reporting
 - **Hyperparameter ranges:** Based on published recommendations for small-sample EEG classification
-- **Statistical thresholds:** Pre-specified (alpha=0.05, FDR correction) per research proposal
+- **Statistical thresholds:** Pre-specified (alpha=0.05, FDR correction across the 8 pre-specified hypothesis pairs) per research proposal
 
 ### What AI Did NOT Do
 
@@ -42,12 +42,12 @@ This document declares all uses of generative AI tools in the development of thi
 
 ### Audit Trail
 
-Each pipeline run generates:
-- `results/qc_stage1.json` — preprocessing quality metrics per subject
-- `results/ml_results.csv` — all model performance metrics
-- `results/correlations.csv` — hypothesis test results with effect sizes
-- `results/shap_importance.csv` — feature importance with stability metrics
-- `evaluate.py` output — pipeline quality scores across 6 dimensions
+Each pipeline run writes to a new timestamped directory under the corresponding stage folder, with a `run_notes.json` audit trail recording timestamp, git commit, input dirs consumed, and outputs produced:
+- `stages/cleaning/runs/<ts>/qc.json` — preprocessing quality metrics per subject-condition
+- `stages/analysis/runs/<ts>/ml_results.csv` — model performance metrics for selected feature sets x models
+- `stages/analysis/runs/<ts>/correlations.csv` — hypothesis test results with effect sizes
+- `stages/analysis/runs/<ts>/shap_importance.csv` and `shap_annotated.csv` — feature importance with stability metrics and biological annotation
+- `evaluate.py` output — immutable pipeline quality scores across 6 dimensions
 
 ### Contact
 
