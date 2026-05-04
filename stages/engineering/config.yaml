@@ -1,7 +1,7 @@
 # Stage 3: Feature Engineering + Behavioral Merge
 # ================================================
-# input.from: features      → reads latest results/features/<ts>/features.csv
-# output.to:  engineering   → writes to results/engineering/<YYYY-MM-DD_HHMMSS>/
+# input.from: features      → reads latest stages/features/runs/<ts>/features.csv
+# output.to:  engineering   → writes to stages/engineering/runs/<YYYY-MM-DD_HHMMSS>/
 
 input:
   from: features

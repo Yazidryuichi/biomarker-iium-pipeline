@@ -7,16 +7,14 @@
 # Stage I/O model
 # ---------------
 # Each stage declares input.from and output.to in its own config and
-# writes to results/<output.to>/<YYYY-MM-DD_HHMMSS>/. Predecessors are
-# auto-resolved to the latest sibling subdir at run time. There is no
-# shared "run dir".
+# writes to stages/<output.to>/runs/<YYYY-MM-DD_HHMMSS>/, co-located
+# with the stage's own code. Predecessors are auto-resolved to the
+# latest sibling subdir at run time. There is no shared "run dir".
 
 paths:
   # Input data
   edf_dir: "./data/EDF"
   behavioral_dir: "./data"
-  # Output root: each stage writes to results/<stage>/<timestamp>/
-  results_dir: "./results"
 
 recording:
   sfreq: 250  # Hz

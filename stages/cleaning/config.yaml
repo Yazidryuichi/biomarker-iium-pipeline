@@ -1,7 +1,7 @@
 # Stage 1: Cleaning
 # =================
 # input.from: raw_edf      → reads from globals.paths.edf_dir
-# output.to:  cleaning      → writes to results/cleaning/<YYYY-MM-DD_HHMMSS>/
+# output.to:  cleaning      → writes to stages/cleaning/runs/<YYYY-MM-DD_HHMMSS>/
 
 input:
   from: raw_edf

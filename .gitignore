@@ -16,6 +16,8 @@ Ethic_Approval_Docs/
 Archives/
 
 # Pipeline outputs (regenerable)
+# Each stage writes timestamped runs to stages/<stage>/runs/
+stages/*/runs/
 results/
 figures/
 !docs/figures/

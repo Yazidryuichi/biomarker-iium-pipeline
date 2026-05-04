@@ -4,7 +4,7 @@
 all: validate
 	python pipeline.py
 
-# Individual stages — each writes to results/<stage>/<timestamp>/
+# Individual stages — each writes to stages/<stage>/runs/<timestamp>/
 cleaning:
 	python pipeline.py --cleaning
 
@@ -32,7 +32,7 @@ evaluate:
 # Docker build and run
 docker:
 	docker build -t biomarker-iium .
-	docker run --rm -v $(PWD)/data:/app/data -v $(PWD)/results:/app/results biomarker-iium
+	docker run --rm -v $(PWD)/data:/app/data -v $(PWD)/stages:/app/stages biomarker-iium
 
 # Convert raw data to BIDS format
 bids:
@@ -40,7 +40,7 @@ bids:
 
 # Clean all stage outputs (preserves raw data)
 clean:
-	rm -rf results/cleaning results/features results/engineering results/analysis
+	rm -rf stages/cleaning/runs stages/features/runs stages/engineering/runs stages/analysis/runs
 	rm -rf docs/figures/*.png
 
 # Install dependencies

@@ -1,7 +1,7 @@
 # Stage 2: Features (raw primitives)
 # ==================================
-# input.from: cleaning      → reads latest results/cleaning/<ts>/cleaned_epochs/
-# output.to:  features      → writes to results/features/<YYYY-MM-DD_HHMMSS>/
+# input.from: cleaning      → reads latest stages/cleaning/runs/<ts>/cleaned_epochs/
+# output.to:  features      → writes to stages/features/runs/<YYYY-MM-DD_HHMMSS>/
 
 input:
   from: cleaning

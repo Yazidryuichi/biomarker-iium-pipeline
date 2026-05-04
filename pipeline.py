@@ -55,7 +55,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Each stage owns stages/<stage>/config.yaml and writes to\n"
-            "results/<output.to>/<timestamp>/. No shared run dir."
+            "stages/<output.to>/runs/<timestamp>/. No shared run dir."
         ),
     )
 

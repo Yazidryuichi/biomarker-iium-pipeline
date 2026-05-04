@@ -1,7 +1,7 @@
 # Stage 4: Analysis (descriptives, correlations, classification, SHAP)
 # =====================================================================
-# input.from: engineering   → reads latest results/engineering/<ts>/full_dataset.csv
-# output.to:  analysis      → writes to results/analysis/<YYYY-MM-DD_HHMMSS>/
+# input.from: engineering   → reads latest stages/engineering/runs/<ts>/full_dataset.csv
+# output.to:  analysis      → writes to stages/analysis/runs/<YYYY-MM-DD_HHMMSS>/
 
 input:
   from: engineering

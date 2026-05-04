@@ -15,22 +15,26 @@ stages/
   cleaning/
     config.yaml            Stage-local: input.from, output.to, params (bandpass, ICA, AutoReject)
     cleaning.py            Stage 1: EDF -> cleaned epochs (HAPPE-compliant ICA flow)
+    runs/<ts>/             Per-invocation outputs (gitignored, co-located with code)
     __init__.py            re-exports `run`, `load_cleaned_epochs`
   features/
     config.yaml            Stage-local: bands, coherence_pairs, wavelet, include_quantum
     features.py            Stage 2: epochs -> raw primitive features (PSD, coherence, wavelet, Hjorth, entropy, PAC, cov)
                                     + optional quantum-inspired features (QEPP/QI/tensor)
     _quantum.py            Helper — QEPP/QI/tensor-network extractors (used by features.py)
+    runs/<ts>/             Per-invocation outputs (gitignored)
     __init__.py            re-exports `run`, `load_features`
   engineering/
     config.yaml            Stage-local: tbr_channels, faa_left/right, posterior_alpha_channels, assessment_date
     engineering.py         Stage 3: math-derived composites (TBR, FAA, alpha reactivity)
                                     + behavioural merge + <target>_group binarization
+    runs/<ts>/             Per-invocation outputs (gitignored)
     __init__.py            re-exports `run`, `load_full_dataset`
   analysis/
     config.yaml            Stage-local: cv_folds, cv_repeats, models, scoring, targets, include_qsvm
     analysis.py            Stage 4: descriptives, correlations (H1-H3), classification (H4), SHAP
     qsvm_classifier.py     Optional QSVM (pennylane) classifier (used by analysis.py)
+    runs/<ts>/             Per-invocation outputs (gitignored)
     __init__.py            re-exports `run`
 scripts/
   quantum_binning_sensitivity.py   Standalone diagnostic: how does QI n_bins affect interference values
@@ -43,7 +47,6 @@ utils/
 data/
   EDF/                     Per-subject directories (Dxxxxxxx) of EDF files
   Behavioral/              AUFEI-O, Flanker, Digit Span Excel files
-results/                   Per-stage timestamped subdirs (see "Stage I/O model" below)
 evaluate.py                IMMUTABLE scoring harness; do not edit
 generate_figures.py        Builds README/manuscript figures from latest analysis output
 ```
@@ -52,17 +55,18 @@ generate_figures.py        Builds README/manuscript figures from latest analysis
 
 ## Stage I/O model (important — this is the architecture)
 
-Each stage owns a folder `stages/<stage>/` with its own `config.yaml` declaring `input.from` (predecessor stage, `raw_edf`, or `behavioral`) and `output.to` (label under `results/`). Stages are **independent**. There is no shared "run dir".
+Each stage owns a folder `stages/<stage>/` with its own `config.yaml` declaring `input.from` (predecessor stage, `raw_edf`, or `behavioral`) and `output.to` (the stage label whose `runs/` dir receives the new timestamped subdir — usually equal to the stage's own name). Stages are **independent**: code, config, and outputs are co-located inside `stages/<stage>/`. There is no shared "run dir" and no shared `results/` parent.
 
-Layout under `results/`:
+Layout per stage:
 ```
-results/
-  cleaning/<YYYY-MM-DD_HHMMSS>/cleaned_epochs/, qc.json, run_notes.json
-  features/<YYYY-MM-DD_HHMMSS>/features.csv, cov_matrices.npz, run_notes.json
-  engineering/<YYYY-MM-DD_HHMMSS>/full_dataset.csv, run_notes.json
-  analysis/<YYYY-MM-DD_HHMMSS>/correlations.csv, run_notes.json,
-                               <target>/{ml_results.csv, shap_importance.csv, shap_annotated.csv, figures/}
+stages/cleaning/runs/<YYYY-MM-DD_HHMMSS>/cleaned_epochs/, qc.json, run_notes.json
+stages/features/runs/<YYYY-MM-DD_HHMMSS>/features.csv, cov_matrices.npz, run_notes.json
+stages/engineering/runs/<YYYY-MM-DD_HHMMSS>/full_dataset.csv, run_notes.json
+stages/analysis/runs/<YYYY-MM-DD_HHMMSS>/correlations.csv, run_notes.json,
+                                         <target>/{ml_results.csv, shap_importance.csv, shap_annotated.csv, figures/}
 ```
+
+`stages/*/runs/` is gitignored. There is no top-level `results_dir` global anymore — `paths` only holds `edf_dir` and `behavioral_dir`.
 
 Stage config schema (`stages/<stage>/config.yaml`):
 ```yaml
@@ -72,16 +76,17 @@ params: { ... stage-specific keys ... }
 ```
 
 Rules:
-- Every stage call creates a **new timestamped subdirectory** under `results/<output.to>/`. No overwriting. The dir is created eagerly by `load_stage_config`.
-- Every stage **auto-resolves its input** at load time. `utils.io.load_stage_config("<stage>")` returns a merged dict containing `paths`, `recording`, `random_state` (globals), `<stage>: <params>` (stage-local), `input_dir` (resolved predecessor `<latest ts>/`), and `output_dir` (newly created). Stage code reads these directly — no `latest_stage_dir`/`make_stage_dir` calls inside stage modules.
+- Every stage call creates a **new timestamped subdirectory** under `stages/<output.to>/runs/`. No overwriting. The dir is created eagerly by `load_stage_config`.
+- Every stage **auto-resolves its input** at load time, and **only consumes the single most recent predecessor run** — `utils.io.latest_stage_dir` sorts subdirs lexicographically (= chronologically for the ISO timestamp format) and returns just the newest. Older `runs/<ts>/` dirs are kept on disk as an archive but are never re-read by downstream stages. `utils.io.load_stage_config("<stage>")` returns a merged dict containing `paths`, `recording`, `random_state` (globals), `<stage>: <params>` (stage-local), `input_dir` (resolved predecessor `<latest ts>/`), and `output_dir` (newly created). Stage code reads these directly — no `latest_stage_dir`/`make_stage_dir` calls inside stage modules.
 - Every stage writes a `run_notes.json` recording timestamp, git commit, the input dirs it consumed, and outputs produced. This is the audit trail.
-- `pipeline.py` (full run) runs all 4 stages back-to-back, each loading its own merged config and getting its own timestamp. Within one full-run invocation, stages also pass artifacts in-memory to skip the disk round-trip — but the saved outputs still land in their respective timestamped dirs.
+- `pipeline.py` (full run) runs all 4 stages back-to-back, each loading its own merged config and getting its own timestamp. Within one full-run invocation, stages also pass artifacts in-memory to skip the disk round-trip — but the saved outputs still land in their respective timestamped dirs under each stage folder.
+- Old runs accumulate in `stages/<stage>/runs/`; prune by hand (`rm -rf` specific timestamps) or wipe everything for a stage with `make clean`. There is no automatic retention policy.
 
 **When you add a new stage or output:**
 - Create `stages/<new_stage>/{config.yaml, <new_stage>.py, __init__.py}`. Wire it into `pipeline.py` via `from stages.<new_stage> import run`.
 - Read params from `config["<stage_name>"]`, globals (`paths`, `recording`, `random_state`) from the top level. `input_dir` and `output_dir` are pre-resolved.
 - Use `write_stage_notes(config["output_dir"], payload)` for the audit trail.
-- Do NOT add new keys like `paths.<stage>_dir` to globals. The only global path keys are `edf_dir`, `behavioral_dir`, `results_dir`.
+- Do NOT add new keys like `paths.<stage>_dir` to globals. The only global path keys are `edf_dir` and `behavioral_dir`. Each stage's run dir is derived from its own folder location (`stages/<stage>/runs/`), not from a global path.
 
 For multi-target output layouts inside `analysis/`, see "Multi-target architecture" below.
 
@@ -134,7 +139,7 @@ These are load-bearing for scientific validity. Do not "simplify" them.
 - Optional dependencies (xgboost, lightgbm, catboost, torch, pennylane, shap, autoreject, coffeine, pyriemann) are imported in `try/except ImportError` at point of use and skipped gracefully — preserve this pattern.
 - Print statements go to stdout via the configured logging handler in `pipeline.py`. Long-running stages should log progress; do not silence them.
 - Random seeds: read `config["random_state"]` (top-level global). `pipeline.py` seeds `random`, `numpy`, and `PYTHONHASHSEED` globally. New stochastic code must thread the seed through.
-- File paths inside stages: never read `config["paths"]["<stage>_dir"]` (those keys are gone). Use `config["input_dir"]` and `config["output_dir"]` resolved by `load_stage_config`. Never hardcode `./results/...`.
+- File paths inside stages: never read `config["paths"]["<stage>_dir"]` (those keys are gone). Use `config["input_dir"]` and `config["output_dir"]` resolved by `load_stage_config`. Never hardcode `./results/...` or `./stages/<stage>/runs/...`.
 - Windows shell: use forward slashes and Unix-style commands; `python` resolves to a working interpreter on the user's machine.
 
 ## Running the pipeline
@@ -164,12 +169,12 @@ The cache discipline is: cleaning is the slow one, features is moderate, enginee
 | `targets` list, models, `cv_folds`, `cv_repeats`, scoring, `include_qsvm` (`stages/analysis/config.yaml`) | `--analysis` only |
 | Globals (`paths`, `recording`, `random_state` in `configs/config.yaml`) | full `python pipeline.py` (recording params would invalidate cleaning) |
 
-Each invocation creates a new `results/<stage>/<ts>/` and the next stage will auto-pick it. No manual flag plumbing.
+Each invocation creates a new `stages/<stage>/runs/<ts>/` and the next stage will auto-pick it. No manual flag plumbing.
 
 ## Configuration map (where each knob lives)
 
 ```
-configs/config.yaml                  paths (edf_dir, behavioral_dir, results_dir),
+configs/config.yaml                  paths (edf_dir, behavioral_dir),
                                      recording (sfreq, channels, conditions),
                                      random_state
 stages/cleaning/config.yaml          bandpass, notch, epoch_duration/overlap,

@@ -4,15 +4,19 @@ I/O utilities for loading EDF files, behavioral data, and config.
 Stage I/O model
 ---------------
 Each pipeline stage owns a folder ``stages/<stage>/`` with its own
-``config.yaml``. Stage configs declare ``input.from`` (a predecessor
-stage name, ``raw_edf``, or ``behavioral``) and ``output.to`` (a label
-that becomes the parent dir under ``results/``).
+``config.yaml`` AND its own runs directory at ``stages/<stage>/runs/``.
+Code and outputs are co-located so a stage is a self-contained module.
+Stage configs declare ``input.from`` (a predecessor stage name,
+``raw_edf``, or ``behavioral``) and ``output.to`` (the stage label whose
+``runs/`` dir receives the new timestamped subdir — usually equal to
+the stage's own name).
 
 At runtime ``load_stage_config(stage_name)`` merges the global config
 (``configs/config.yaml``: paths, recording, random_state) with the
-stage-local params, eagerly creates ``results/<output.to>/<ts>/`` for
-output, and resolves ``input_dir`` by either reading globals or finding
-the most recent timestamped subdir of the input stage.
+stage-local params, eagerly creates
+``stages/<output.to>/runs/<YYYY-MM-DD_HHMMSS>/``, and resolves
+``input_dir`` by either reading globals or finding the most recent
+timestamped subdir under the input stage's ``runs/``.
 
 Use ``write_stage_notes(output_dir, payload)`` to record an audit trail
 (timestamp, git commit, input dirs consumed, outputs produced).
@@ -145,13 +149,13 @@ def target_group_col(target):
 # Per-stage I/O directory resolution
 # ──────────────────────────────────────────────────────────────────
 
-def _results_root(config):
-    return config.get("paths", {}).get("results_dir", "./results")
-
-
 def stage_root_dir(config, stage_name):
-    """Return the parent directory holding all timestamped runs for a stage."""
-    return os.path.join(_results_root(config), stage_name)
+    """
+    Return the parent directory holding all timestamped runs for a stage.
+    Layout is ``stages/<stage_name>/runs/`` — co-located with the stage's
+    code and config so each stage is a self-contained module.
+    """
+    return os.path.join(REPO_ROOT, "stages", stage_name, "runs")
 
 
 def latest_stage_dir(config, stage_name):
