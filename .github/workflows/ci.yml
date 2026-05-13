@@ -58,17 +58,19 @@ jobs:
           python -m pip install pytest
 
       - name: Generate synthetic fixture (small N for CI smoke test)
-        # N=12 instead of N=28 — CI is a smoke test ("does the pipeline run
-        # without crashing"), not a statistical run. On N=28 the pipeline
-        # took 1+ hour in CI runner; N=12 should keep it under 10 min.
-        # 6-per-class minimum is comfortable for the 5-fold stratified CV
-        # (config.yaml `cv_folds: 5` needs ≥5 samples per class to fit).
-        # The fixture generator is identical to the local Makefile target;
-        # only the subject count differs.
+        # N=20 — Stage 5 fair_comparison hardcodes RepeatedStratifiedKFold
+        # (n_splits=10, n_repeats=10), which requires ≥10 samples per class.
+        # 20 subjects → 10 high-EF + 10 low-EF after median split → fits.
+        # N=12 was tried first (cv_folds=5 minimum from config.yaml) but
+        # crashed Stage 6 → Stage 5 with "n_splits=10 cannot be greater
+        # than the number of members in each class".
+        # CI is a smoke test ("does the pipeline run without crashing"),
+        # not a statistical run; N=20 still 30% less compute than N=28
+        # and well above the structural minimum.
         run: |
           python tests/generate_synthetic_fixture.py \
             --out tests/fixtures/synthetic \
-            --n-subjects 12 \
+            --n-subjects 20 \
             --seed 42
 
       - name: Run pipeline end-to-end on fixture
