@@ -46,23 +46,48 @@ N_SAMPLES = SFREQ * DURATION_S
 def make_signal(rng: np.random.Generator, ef_level: float) -> np.ndarray:
     """One subject's multichannel signal.
 
-    `ef_level` in [0, 1] modulates a small alpha-band oscillation; this
-    gives the classifier something to find without ground-truthing any
-    specific feature. Values are in volts; MNE expects volts.
+    Real EEG has substantial inter-channel correlation from volume conduction
+    (shared cortical sources reach multiple sensors). Pure-noise channels would
+    be uncorrelated and Stage 1's correlation-based bad-channel detector would
+    flag every channel. To avoid that, we generate:
+      1) a per-channel idiosyncratic white-noise component (the "local" part),
+      2) a small set of shared "source" oscillators that all channels mix into
+         with channel-specific weights (the "volume-conduction" part).
+
+    `ef_level` in [0, 1] modulates the alpha-band component on posterior
+    channels and gives the classifier something to find. Values are in volts;
+    MNE expects volts.
     """
     n_ch = len(CHANNELS)
     t = np.arange(N_SAMPLES) / SFREQ
-    # White noise at ~20 µV RMS.
-    sig = rng.standard_normal((n_ch, N_SAMPLES)) * 20e-6
-    # Alpha-band carrier ~10 Hz, amplitude scaled by ef_level.
+
+    # Local idiosyncratic noise (15 µV RMS per channel).
+    local = rng.standard_normal((n_ch, N_SAMPLES)) * 15e-6
+
+    # Shared cortical sources: a few broadband + a few rhythmic components.
+    # Each channel mixes each source with a random positive weight.
+    n_sources = 4
+    sources = np.zeros((n_sources, N_SAMPLES))
+    sources[0] = rng.standard_normal(N_SAMPLES) * 25e-6  # broadband noise source
+    sources[1] = rng.standard_normal(N_SAMPLES) * 20e-6  # second broadband source
+    sources[2] = 8e-6 * np.sin(2 * np.pi * 6.0 * t)      # 6 Hz theta
+    sources[3] = 10e-6 * np.sin(2 * np.pi * 18.0 * t)    # 18 Hz beta
+    # Mixing matrix with positive entries so all channels share the sources.
+    mix = rng.uniform(0.4, 1.0, size=(n_ch, n_sources))
+    shared = mix @ sources
+
+    sig = local + shared
+
+    # Alpha-band carrier ~10 Hz, posterior-dominant, amplitude scaled by ef_level.
     alpha = (8e-6 * ef_level) * np.sin(2 * np.pi * 10.0 * t)
-    # Posterior channels (P3, Pz, P4, O1, O2) get the alpha most.
     posterior = [CHANNELS.index(c) for c in ("P3", "Pz", "P4", "O1", "O2")]
     sig[posterior, :] += alpha[np.newaxis, :]
+
     # Slow drift on frontal channels (something for ICA to remove).
     frontal = [CHANNELS.index(c) for c in ("Fp1", "Fp2")]
     drift = 40e-6 * np.sin(2 * np.pi * 0.3 * t)
     sig[frontal, :] += drift[np.newaxis, :]
+
     # Occasional blink-like artefacts in Fp1/Fp2.
     blink_times = rng.choice(N_SAMPLES, size=4, replace=False)
     for ts in blink_times:
