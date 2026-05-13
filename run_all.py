@@ -48,6 +48,12 @@ try:
 except ImportError:
     HAS_QUANTUM = False
 
+try:
+    from stages.stage6_density_matrix import run_stage6
+    HAS_DENSITY_MATRIX = True
+except ImportError:
+    HAS_DENSITY_MATRIX = False
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -55,7 +61,8 @@ def main():
     )
     parser.add_argument(
         "--stage", type=int, default=None,
-        help="Run specific stage (1-5). 5=quantum exploration. Default: run all."
+        help="Run specific stage (1-6). 5=quantum exploration, "
+             "6=explicit density-matrix features. Default: run all."
     )
     parser.add_argument(
         "--include-emotional", action="store_true",
@@ -161,6 +168,25 @@ def main():
             )
 
         quantum_df = run_quantum_exploration(config, all_epochs, full_df)
+
+    # ── Stage 6: Explicit Density-Matrix Features ──
+    if (args.stage is None or args.stage == 6) and HAS_DENSITY_MATRIX:
+        import pandas as pd
+        if args.stage == 6:
+            all_epochs = load_cleaned_epochs(config)
+            full_df = pd.read_csv(
+                os.path.join(config["paths"]["output_dir"], "full_dataset.csv")
+            )
+            quantum_path = os.path.join(
+                config["paths"]["output_dir"], "quantum_features.csv"
+            )
+            quantum_df = (
+                pd.read_csv(quantum_path) if os.path.exists(quantum_path) else None
+            )
+        else:
+            quantum_df = locals().get("quantum_df", None)
+
+        run_stage6(config, all_epochs, full_df, quantum_df=quantum_df)
 
     elapsed = time.time() - start_time
     print(f"\n{'=' * 60}")

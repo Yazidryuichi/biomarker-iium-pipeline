@@ -21,6 +21,7 @@ figures/
 !docs/figures/
 *.fif
 *.npz
+logs/
 
 # Python
 __pycache__/

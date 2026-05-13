@@ -66,9 +66,14 @@ STAGE 4: Statistical Analysis and Machine Learning
     4C. Feature importance: per-fold SHAP with stability analysis + biological annotation
     |
     v
-STAGE 5: Quantum-Inspired Feature Exploration (exploratory)
-    QEPP interference patterns, quantum probability interactions,
-    von Neumann entropy of EEG density matrices
+STAGE 5: Fair Comparison (feature set x model class, 2x2)
+    LOSO predicted probabilities, subject-bootstrap CIs, paired DeLong tests
+    |
+    v
+STAGE 6: Density-matrix Feature Extraction (exploratory, main branch)
+    Channel-covariance density matrices, von Neumann entropy,
+    Hilbert-Schmidt similarity. Quantum-cognition interpretive
+    layer kept on the `quantum-exploration/` branch.
 ```
 
 ## Methodological Safeguards
@@ -88,27 +93,71 @@ STAGE 5: Quantum-Inspired Feature Exploration (exploratory)
 
 ## Preliminary Results (N = 28 pilot)
 
+### Limitations to bear in mind at this N
+
+Before reading the numbers below, four points apply to everything reported in this section:
+
+1. **No correlation survives FDR correction at N = 28.** The strongest single correlation (TBR-Cz vs Global EF, Spearman rho = -0.383) has p = 0.044 uncorrected but does not survive Benjamini-Hochberg across the pre-specified test family. This is expected — the study is powered for N = 100, not the pilot.
+2. **No classifier is significantly above chance at N = 28** under permutation testing. The best cells are marginal (p ≈ 0.08-0.12, see "Fair comparison" subsection below). The classification tables presented here are for transparency and method development; they are not claims of biomarker discovery.
+3. **The originally reported 95% bootstrap CIs were too tight.** The 7-classifier × 4-feature-set table below uses per-fold bootstrap CIs (N=100 folds, only 28 actual subjects) that under-represent variance. Subject-level CIs from the Stage 5 fair-comparison rerun are 2-3× wider and should be preferred. See "Fair comparison" below.
+4. **All claims here are pilot-scale.** We expect to revisit at the target N. Where a finding cuts against canonical practice (e.g., the dominance of posterior-parietal relative beta over the frontal TBR), the right reading is "the pre-specified TBR hypothesis did not find support at the pilot N," not "TBR has been refuted."
+
 ### Correlations
 
-TBR at Cz shows the strongest association with Global EF (Spearman rho = -0.383, p = .044, Cohen's d = -0.83), with effect direction consistent with the literature: higher TBR corresponds to lower executive function. No correlations survive FDR correction at this sample size, which is expected given the study is powered for N = 100.
+TBR at Cz shows the strongest pre-specified association with Global EF: Spearman rho = -0.383, p = .044 uncorrected, with effect direction consistent with prior literature (higher TBR corresponds to lower executive function). The conversion to Cohen's d (d = 2·rho / √(1-rho²) = -0.83) is reported for comparability with prior QEEG-EF work but is non-standard for correlation effect sizes and should be read as a rough magnitude indicator only. **No correlations survive FDR correction at this sample size.**
 
-### Classification
+### Classification (7-model × 4-feature-set sweep, per-fold reporting — kept for method-development transparency)
 
-| Feature Set | Best Model | Balanced Accuracy [95% CI] | AUC |
-|-------------|-----------|---------------------------|-----|
+| Feature Set | Best Model | Balanced Accuracy [per-fold 95% CI] | AUC |
+|-------------|-----------|-------------------------------------|-----|
 | Conventional QEEG | XGBoost | 0.636 [0.587 - 0.687] | 0.677 |
 | Conventional + Advanced | MLP | 0.636 [0.590 - 0.683] | 0.637 |
 | Covariance | RandomForest | 0.618 [0.568 - 0.667] | 0.625 |
 | All features | RandomForest | 0.587 [0.545 - 0.629] | 0.590 |
 
-![Model Comparison](docs/figures/model_comparison.png)
-*Balanced accuracy across 7 classifiers and 4 feature sets. XGBoost on conventional QEEG features achieves 0.636. The H4 target of 0.75 is not yet met at N = 28.*
+*Per-fold balanced accuracy across 7 classifiers and 4 feature sets. XGBoost on conventional QEEG features achieves 0.636. The pilot-stage target of 0.75 is not met at N = 28 and was a power-mismatched target to begin with.* **The bracketed CIs above are per-fold bootstrap CIs and are too tight; the Stage 5 fair-comparison subject-level CIs (~0.20-0.35 wide) are the honest version. The 2x2 fair-comparison figure (Stage 5) is shown below.**
 
-**Permutation test:** p = 0.149 (not statistically significant at N = 28). The best model performs above the permutation mean (0.494), but confirmatory power requires the full sample.
+**Permutation test:** p = 0.149 for the best per-fold mean BAcc — not statistically significant at N = 28. The best model performs above the permutation mean (0.494), but the permutation p-value is the headline; the SHAP-based biomarker rankings below should be read as candidate features for the target-N rerun, not as established biomarkers.
 
-**Hyperparameter tuning** (nested CV): XGBoost_tuned achieves 0.643 balanced accuracy.
+### Fair comparison (Stage 5) — density-matrix features vs classical QEEG features, matched 2×2 design
 
-### Biomarker Candidates (SHAP Feature Importance)
+The original Stage 5 comparison contrasted density-matrix features under linear SVM against classical features under shallow Random Forest — different feature sets AND different model classes, conflating feature-set effect with model-class effect. The fair comparison runs a 2×2 design under identical CV, with **leave-one-subject-out** predicted probabilities (unbiased AUC, no fold-level non-independence) and **subject-bootstrap** CIs (N_BOOT=10000 resamples of subjects, not folds).
+
+| Feature set | Model | LOSO AUC [subject-bootstrap 95% CI] | LOSO BAcc [CI] | Permutation p (per-fold BAcc) |
+|---|---|---|---|---|
+| Density matrix | Linear SVM | 0.785 [0.583 - 0.947] | 0.752 [0.585 - 0.896] | 0.078 |
+| Density matrix | Shallow RF | 0.714 [0.492 - 0.896] | 0.537 [0.354 - 0.717] | 0.098 |
+| Classical QEEG | Linear SVM | 0.320 [0.111 - 0.544] | 0.428 [0.254 - 0.610] | 0.569 |
+| Classical QEEG | Shallow RF | 0.617 [0.391 - 0.831] | 0.642 [0.459 - 0.818] | 0.118 |
+
+**Paired DeLong tests on subject-level AUC** (the standard test for paired ROC curves; replaces the per-fold Wilcoxon, which treated correlated folds as independent):
+
+| Comparison | ΔAUC | DeLong z | DeLong p (two-sided) |
+|---|---|---|---|
+| DM-SVM vs Classical-SVM (matched model) | +0.464 | 3.47 | **0.001** |
+| DM-RF vs Classical-RF (matched model) | +0.097 | 0.66 | 0.507 |
+| DM-SVM vs Classical-RF (the original portfolio comparison) | +0.168 | 1.12 | 0.261 |
+| DM-SVM vs DM-RF (within DM features) | +0.071 | 1.20 | 0.229 |
+| Classical-SVM vs Classical-RF (within classical features) | -0.296 | -2.80 | 0.005 |
+
+**The honest reading:**
+
+- **Under matched linear-SVM**, density-matrix features beat classical features substantially and significantly (ΔAUC +0.464, DeLong p = 0.001). However, classical-SVM in this design performs *below chance* (AUC 0.32) — this is consistent with high-dimensional overfitting (622 classical features, k=10 ANOVA selection, N=28) rather than a genuine ceiling on classical features. The classical-SVM cell sets a low bar.
+- **Under matched shallow-RF**, density-matrix features and classical features perform **similarly** (ΔAUC +0.097, DeLong p = 0.507). This is the toughest test for the DM-features claim and the result a methods-sensitive reader would weight most.
+- **The original portfolio comparison** (DM-SVM vs Classical-RF, the apples-to-oranges baseline) shows ΔAUC = +0.168, but with subject-level CIs that overlap and DeLong p = 0.261. The numerical gap survives the rerun; the *statistical significance* does not under proper paired testing.
+- **No cell reaches significance against chance** under permutation testing at N = 28 (all p ≥ 0.078). The classifier-vs-chance question awaits the target N.
+
+**Net:** the density-matrix feature representation appears to carry information that survives explicit feature extraction in a way classical spectral and coherence summaries do not — but the strength of that claim is model-dependent and CIs are wide. The replication arm at N = 100 (and on ds004284) is the test that matters.
+
+![Fair 2×2 Comparison](docs/figures/model_comparison.png)
+
+*2×2 fair comparison (feature set × model class) at N=28. Error bars are subject-bootstrap 95% CIs (resamples of subjects, not folds). Permutation p (label-permuted per-fold BAcc) shown at the base of each bar. Density-matrix features under linear SVM are the only cell whose CI lower bound clears chance.*
+
+See [`results/stage5_fair_comparison.json`](results/stage5_fair_comparison.json) for the full numerical artifact, [`stages/stage5_fair_comparison.py`](stages/stage5_fair_comparison.py) for the rerun script, and `results/stage5_per_subject.csv` for per-subject LOSO probabilities.
+
+### Biomarker Candidates (SHAP Feature Importance — exploratory, conditional on the underlying classifier)
+
+The SHAP rankings below come from the 7-model × 4-feature-set sweep above. Read them as **candidate features for re-evaluation at the target N**, not as established biomarkers — the underlying classifier they explain is not significantly above chance at N = 28.
 
 ![SHAP Feature Importance](docs/figures/shap_top15.png)
 
@@ -121,19 +170,25 @@ TBR at Cz shows the strongest association with Global EF (Spearman rho = -0.383,
 | 5 | TBR at Cz | 0.044 | Stable | Cortical arousal regulation |
 | 6 | Absolute beta power O1 | 0.034 | Stable | Occipital activation |
 
-The dominant role of fronto-parietal beta coherence (not TBR) as the top biomarker candidate is noteworthy. This suggests that inter-regional connectivity may be more informative for EF classification than single-channel spectral ratios, consistent with network-level theories of executive control (Sauseng et al., 2005).
+The dominance of fronto-parietal beta coherence and posterior-parietal relative beta — rather than the frontal theta/beta ratio that Arns, Conners & Kraemer (2013) foreground — is noteworthy at the pilot N, consistent with network-level theories of executive control (Sauseng et al., 2005). The TBR-Cz feature does appear (rank 5) but is not the top-ranked feature. This is reported transparently as a pilot-scale observation, not as a refutation of TBR.
 
-### Quantum-Inspired Features (Exploratory)
+### Non-linear feature transforms (covariance density matrix, von Neumann entropy) — exploratory
 
-![Quantum vs Classical](docs/figures/quantum_vs_classical.png)
+This subsection was previously titled "Quantum-Inspired Features." The features themselves are unchanged; the framing has been corrected. Von Neumann entropy of an EEG covariance matrix and density-matrix Hilbert-Schmidt similarity are mathematically well-defined non-linear transforms of the multichannel signal; whether the "quantum" framing adds anything beyond non-linear feature engineering is an open theoretical question that this pilot is not designed to resolve. A separate `quantum-exploration/` branch retains the quantum-framing analysis for future strengthening at N = 100.
 
-| Feature Set | Best Model | Balanced Accuracy | AUC |
+| Feature set | Best Model | Balanced Accuracy | AUC |
 |---|---|---|---|
-| Quantum only | Logistic Regression | 0.657 | 0.694 |
-| Classical only | Random Forest | 0.585 | 0.662 |
+| Density-matrix only (linear SVM) | LinearSVC | 0.657 (per-fold) / 0.752 (LOSO) | 0.780 (per-fold) / 0.785 (LOSO) |
+| Classical QEEG only (RF) | RandomForest | 0.618 (per-fold) / 0.642 (LOSO) | 0.615 (per-fold) / 0.617 (LOSO) |
 | Combined | Logistic Regression | 0.608 | 0.634 |
 
-Quantum-inspired features (QEPP interference patterns, quantum probability interactions, von Neumann entropy) outperform classical QEEG features by +7.2 percentage points in balanced accuracy. This exploratory finding suggests that non-linear inter-channel dependencies captured by quantum-inspired formalisms may encode EF-relevant neural dynamics that standard spectral and coherence measures miss. These results require validation at N = 100. For theoretical grounding, see Busemeyer & Bruza (2012), Khrennikov & Yamada (2025), and Alotaibi et al. (2026).
+Density-matrix features outperform classical QEEG features under matched linear-SVM (DeLong p = 0.001, Stage 5 fair comparison above), but the comparison is sensitive to the classical-feature model choice: under matched RF, the gap is not significant (DeLong p = 0.507). The classical-SVM cell underperforms chance, which is consistent with high-dim overfitting on 622 features at N = 28 rather than a genuine result. **Read these comparisons as: the density-matrix representation appears to compress signal more usefully than the conventional QEEG menu, at this scale and on this cohort, under the model classes tested.** The kernel routes to the same density matrix (Hilbert-Schmidt SVM, parameterised quantum-circuit SVM on Stage 5 features) underperform the direct-feature route — what's gained by the explicit density-matrix features is lost when the same information is presented as a similarity kernel.
+
+![Matched-Model Contrast](docs/figures/quantum_vs_classical.png)
+
+*Matched-model contrast at N=28: density-matrix features vs classical QEEG features, holding model class fixed. Under linear-SVM the gap is large and significant by paired DeLong (ΔAUC=+0.46, p=0.001). Under shallow-RF the gap collapses (ΔAUC=+0.10, p=0.51). Annotated p-values per bar are label-permutation tests on per-fold BAcc; the DeLong p between bars in each pair is the paired-ROC test on subject-level AUCs.*
+
+For theoretical grounding of the non-linear feature-transform framing, see Schuld (2021) on the kernel-equivalence of supervised quantum models. The "quantum-cognition" interpretive layer (Busemeyer & Bruza 2012, Khrennikov & Yamada 2025, Alotaibi et al. 2026) lives in the `quantum-exploration/` branch and is intentionally deferred to N = 100.
 
 ## Current Status and Next Steps
 
@@ -142,10 +197,11 @@ Quantum-inspired features (QEPP interference patterns, quantum probability inter
 | Ethics approval | Complete | RS Soeharto Heerdjan Ethics Committee |
 | Pilot data collection (N = 28) | Complete | EEG + AUFEI + Flanker + Digit Span |
 | Preprocessing pipeline | Complete | HAPPE-compliant, validated on all 28 subjects |
-| Feature extraction | Complete | 920 conventional + 258 quantum features per subject |
+| Feature extraction | Complete | 920 conventional + 258 density-matrix-derived features per subject |
 | ML classification | Complete | 7 models, nested CV, permutation test, bootstrap CI |
 | SHAP + biological interpretation | Complete | Per-fold SHAP with stability metrics |
-| Quantum-inspired exploration | Complete | 3 feature families, sensitivity analysis |
+| Density-matrix feature extraction (stage 6) | Complete | 3 feature families, sensitivity analysis. Quantum-cognition framing on `quantum-exploration/` branch. |
+| Fair 2x2 comparison (stage 5) | Complete | Subject-level LOSO, paired DeLong, subject-bootstrap CIs |
 | Full data collection (N = 100) | Planned | Required for confirmatory analysis |
 | External validation | Planned | Independent cohort or public dataset |
 | Manuscript preparation | In progress | Target: journal submission after N = 100 |
@@ -154,14 +210,14 @@ Quantum-inspired features (QEPP interference patterns, quantum probability inter
 
 1. Complete data collection to N = 100 (statistical power for H1-H4)
 2. Re-run pipeline on full sample to obtain confirmatory results
-3. Validate quantum-inspired features on independent dataset
+3. Validate density-matrix features on independent dataset (ds004284 replication queued)
 4. Prepare manuscript for submission
 
 ## Repository Structure
 
 ```
 biomarker-iium-pipeline/
-  run_all.py                 # Pipeline orchestrator (stages 1-5)
+  run_all.py                 # Pipeline orchestrator (stages 1-6)
   evaluate.py                # Pipeline quality evaluation (6 dimensions)
   validate_data.py           # Data integrity checks
   convert_to_bids.py         # BIDS format conversion (mne-bids)
@@ -173,7 +229,9 @@ biomarker-iium-pipeline/
     stage2_features.py       # Feature extraction (920 features)
     stage3_merge.py          # Behavioural data integration
     stage4_analysis.py       # Statistics, ML, SHAP
-    exploratory_quantum.py   # Quantum-inspired features
+    stage5_fair_comparison.py # 2x2 fair comparison (feature x model), LOSO + DeLong
+    stage6_density_matrix.py  # Explicit density-matrix feature extraction
+    exploratory_quantum.py   # Quantum-cognition framing (see quantum-exploration/ branch)
   utils/
     io.py                    # Data loading utilities
     bio_interpretation.py    # SHAP-to-neuroscience mapping

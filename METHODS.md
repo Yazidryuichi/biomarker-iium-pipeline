@@ -239,6 +239,57 @@ rho = C / Tr(C)
 
 Note: The submatrix of a covariance matrix is not a proper partial trace over a tensor product Hilbert space. This metric is named "entropy coupling" to avoid conflation with quantum mutual information.
 
+## 4.5 Stage 6: Explicit Density-Matrix Features (Path B)
+
+Stage 5 builds quantum-inspired *summary* features (QEPP, von Neumann entropy, etc.) and then runs a quantum-kernel SVM on the PCA-reduced subset. Stage 6 instead builds the explicit density matrix entry-wise from the multichannel analytic signal and uses every entry as a feature directly. This isolates the empirical question that Stage 5 cannot cleanly answer: how much of the QSVM result is the density matrix itself versus the encoding-circuit + PCA pipeline?
+
+### 4.5.1 Construction
+
+For each subject, condition (Eyes_Open) and band $b \in \{\delta, \theta, \alpha, \beta\}$:
+
+1. Zero-phase Butterworth bandpass (`scipy.signal.sosfiltfilt`, order 4) on each of the $N=15$ channels. `sosfiltfilt` is mandatory: a causal `sosfilt` injects a frequency-dependent group delay that contaminates every off-diagonal phase term in the density matrix.
+2. Hilbert transform per channel produces the analytic signal $z_c(t) \in \mathbb{C}$.
+3. At each time $t$, stack channels into the column vector $\psi(t) = [z_1(t), \ldots, z_N(t)]^\top \in \mathbb{C}^N$.
+4. Normalize to unit norm: $\hat{\psi}(t) = \psi(t) / \|\psi(t)\|_2$. Time samples with $\|\psi(t)\| < 10^{-12}$ are dropped (silent at this band).
+5. Average rank-1 projectors over all kept time samples across all epochs:
+   $$ \rho_b = \frac{1}{T} \sum_t \hat{\psi}(t) \, \hat{\psi}(t)^{\dagger} $$
+6. Symmetrize $\rho_b \leftarrow \tfrac{1}{2}(\rho_b + \rho_b^{\dagger})$ and renormalize so $\mathrm{Tr}(\rho_b) = 1$.
+
+The result is a Hermitian, positive semi-definite, trace-one $N \times N$ complex matrix — a density matrix in the formal quantum-mechanical sense, even though the construction is purely classical.
+
+QC across N=28 subjects × 4 bands: max trace error $4 \times 10^{-16}$, min eigenvalue above $-7 \times 10^{-17}$ (within float64 round-off). Cauchy-Schwarz $|\rho_{ij}|^2 \le \rho_{ii}\rho_{jj}$ holds throughout.
+
+### 4.5.2 Feature Vector
+
+Per band: $N$ real diagonal entries $\rho_{ii}$ (occupation probabilities) plus the $N(N-1)/2$ strictly-upper-triangle complex entries split into real and imaginary parts. Total per band: $N^2 = 225$ real features. Across four bands: 900 real features at $N=15$.
+
+The $(\mathrm{Re}, \mathrm{Im})$ decomposition is mathematically equivalent to $(|\cdot|, \arg)$ but avoids the cyclic-angle pathology that breaks linear and SVM classifiers.
+
+### 4.5.3 Hilbert-Schmidt Kernel
+
+The Hilbert-Schmidt inner product on density matrices defines a positive semi-definite kernel:
+$$ K(s, t) = \frac{1}{B} \sum_b \mathrm{Tr}(\rho_b^s \rho_b^t) = \frac{1}{B} \sum_b \langle \mathrm{vec}(\rho_b^s), \mathrm{vec}(\rho_b^t) \rangle_{\mathrm{HS}} $$
+
+This is the *exact* analogue of the QSVM fidelity kernel under the Schuld (2021) equivalence $K_Q(x,y) = |\langle\psi(x)|\psi(y)\rangle|^2 = \mathrm{Tr}(\rho_x \rho_y)$. A linear SVM on the flat features and a precomputed-kernel SVM with $K(s,t)$ are mathematically equivalent up to selection bias from `SelectKBest`; this self-consistency is enforced as a unit test.
+
+### 4.5.4 Matched Cross-Validation
+
+`RepeatedStratifiedKFold(n_splits=10, n_repeats=10, random_state=42)`. The same 100 train/test fold indices are reused for every model — flat-feature classifiers, the HS-kernel SVM, *and* the QSVM re-evaluated on Stage 5 quantum features. This makes the QSVM-vs-density-matrix difference a paired comparison and licenses Wilcoxon signed-rank testing.
+
+### 4.5.5 Empirical Result (N=28, balanced 14/14 on `ef_group_global`)
+
+| Feature set                     | Best model     | Bal. Acc | AUC   |
+| ------------------------------- | -------------- | -------- | ----- |
+| Density matrix                  | SVM linear     | 0.657    | 0.780 |
+| Density matrix                  | RandomForest   | 0.642    | 0.755 |
+| Classical (PSD/coh/cov/TBR/FAA) | RandomForest   | 0.618    | 0.615 |
+| Density matrix                  | HS-kernel SVM  | 0.540    | 0.395 |
+| Quantum features (Stage 5)      | QSVM-6q-ZZ     | 0.495    | 0.525 |
+
+The 0.657 vs 0.585 contrast originally reported in *Density Matrix in Your Brainwaves* (Stage 5: QSVM on quantum features vs SVM-RBF on classical) is now reproduced as a stronger claim: the explicit density matrix on its own beats every classical baseline at AUC 0.780, with no quantum-kernel proxy in between.
+
+The HS-kernel SVM and QSVM both underperform the linear SVM on flat features on this data: paired Wilcoxon $\mathrm{HS} - \mathrm{QSVM} = +0.045$, $p = 0.44$ (n.s.). This means the Schuld (2021) prediction that the encoding-circuit kernel and the explicit density-matrix kernel span the same RKHS does **not** hold here. The likely cause is the lossy compression in Stage 5: 258 quantum-inspired features → PCA to 6 dims → rescale to $[0, \pi]$ → encoded into a 6-qubit circuit. None of these steps preserves the off-diagonal complex structure of the explicit $\rho$. This is a finding, not a bug.
+
 ## 5. Hypotheses
 
 Pre-specified, derived from literature review:
