@@ -278,15 +278,43 @@ This is the *exact* analogue of the QSVM fidelity kernel under the Schuld (2021)
 
 ### 4.5.5 Empirical Result (N=28, balanced 14/14 on `ef_group_global`)
 
-| Feature set                     | Best model     | Bal. Acc | AUC   |
-| ------------------------------- | -------------- | -------- | ----- |
-| Density matrix                  | SVM linear     | 0.657    | 0.780 |
-| Density matrix                  | RandomForest   | 0.642    | 0.755 |
-| Classical (PSD/coh/cov/TBR/FAA) | RandomForest   | 0.618    | 0.615 |
-| Density matrix                  | HS-kernel SVM  | 0.540    | 0.395 |
-| Quantum features (Stage 5)      | QSVM-6q-ZZ     | 0.495    | 0.525 |
+The numbers below are reported at two CV levels for transparency about method development:
+**per-fold means** from `RepeatedStratifiedKFold(n_splits=10, n_repeats=10)` are kept visible
+because they reproduce the original Stage 5 / portfolio headline, but the **subject-level
+leave-one-out (LOSO)** AUC and balanced accuracy are the inference the matched 2×2 fair
+comparison weights (see `stages/stage5_fair_comparison.py` and `results/stage5_fair_comparison.json`).
+At N=28 the LOSO 95% subject-bootstrap CIs are 2-3× wider than the per-fold bootstrap CIs
+originally reported; the per-fold bootstrap treated 100 correlated folds as independent and
+was too tight.
 
-The 0.657 vs 0.585 contrast originally reported in *Density Matrix in Your Brainwaves* (Stage 5: QSVM on quantum features vs SVM-RBF on classical) is now reproduced as a stronger claim: the explicit density matrix on its own beats every classical baseline at AUC 0.780, with no quantum-kernel proxy in between.
+| Feature set                     | Model class     | Per-fold BAcc | Per-fold AUC | LOSO BAcc | LOSO AUC [95% subject-bootstrap CI] |
+| ------------------------------- | --------------- | ------------- | ------------ | --------- | ----------------------------------- |
+| Density matrix                  | Linear SVM      | 0.657         | 0.780        | 0.752     | 0.785 [0.583, 0.947]                |
+| Density matrix                  | Shallow RF      | 0.642         | 0.755        | 0.537     | 0.714 [0.492, 0.896]                |
+| Classical QEEG                  | Linear SVM      | 0.458         | 0.445        | 0.428     | 0.320 [0.111, 0.544]                |
+| Classical QEEG                  | Shallow RF      | 0.618         | 0.615        | 0.642     | 0.617 [0.391, 0.831]                |
+| Density matrix                  | HS-kernel SVM   | 0.540         | 0.395        | —         | — (per-fold AUCs not retained)      |
+| Quantum features (Stage 5)      | QSVM-6q-ZZ      | 0.495         | 0.525        | —         | — (per-fold AUCs not retained)      |
+
+The original "0.657 vs 0.585" headline (QSVM on quantum features vs SVM-RBF on classical) was
+recharacterised in Phase 1 as a fair 2×2 design (feature set × model class) under matched CV
+with paired DeLong tests on subject-level AUC. The honest verdicts:
+
+- **Under matched linear-SVM**: density-matrix beats classical substantially, ΔAUC = +0.464,
+  DeLong p = **0.001**. *However*, the classical+SVM cell sits at AUC = 0.320 — below chance,
+  consistent with high-dimensional overfitting (622 features, k=10 ANOVA selection at N=28) —
+  setting a low bar that the SVM-matched contrast doesn't have to clear high to win. Sensitivity
+  work with L1-regularised SVM or smaller-k feature selection is queued.
+- **Under matched shallow-RF**: density-matrix and classical are statistically indistinguishable
+  at this N, ΔAUC = +0.097, DeLong p = 0.507.
+- **Under the original cross-model contrast** (DM-SVM vs Classical-RF), the numerical gap
+  ΔAUC = +0.168 survives the rerun but the statistical significance does not (DeLong p = 0.261).
+
+The honest reading: density-matrix features appear to compress signal more usefully than the
+conventional QEEG menu **under linear SVM**, but the strength of that claim is model-class-dependent
+and the subject-level CIs are wide. Replication at N = 100 and on OpenNeuro ds004284 is the test
+that matters. See README "Fair comparison (Stage 5)" section and `stages/stage5_fair_comparison.py`
+for the full statistical artifact.
 
 The HS-kernel SVM and QSVM both underperform the linear SVM on flat features on this data: paired Wilcoxon $\mathrm{HS} - \mathrm{QSVM} = +0.045$, $p = 0.44$ (n.s.). This means the Schuld (2021) prediction that the encoding-circuit kernel and the explicit density-matrix kernel span the same RKHS does **not** hold here. The likely cause is the lossy compression in Stage 5: 258 quantum-inspired features → PCA to 6 dims → rescale to $[0, \pi]$ → encoded into a 6-qubit circuit. None of these steps preserves the off-diagonal complex structure of the explicit $\rho$. This is a finding, not a bug.
 
