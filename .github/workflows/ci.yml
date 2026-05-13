@@ -55,9 +55,12 @@ jobs:
         run: make synthetic-fixture
 
       - name: Run pipeline end-to-end on fixture
+        # set -o pipefail so a non-zero exit from python propagates through tail
+        # (without it, tail returns 0 and masks pipeline failures as ✓).
         run: |
+          set -o pipefail
           python run_all.py --config tests/fixtures/synthetic/config.fixture.yaml \
-            2>&1 | tail -80
+            2>&1 | tail -200
 
       - name: Regenerate figures from Stage 5 output
         run: |
