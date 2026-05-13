@@ -1,5 +1,9 @@
 # Quantitative EEG Biomarkers of Executive Function in Children
 
+[![CI](https://github.com/Yazidryuichi/biomarker-iium-pipeline/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Yazidryuichi/biomarker-iium-pipeline/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
+
 **A Computational Pipeline for Identifying Neural Markers of Executive Function Dysfunction Using Resting-State EEG and Machine Learning**
 
 ## Background and Motivation
