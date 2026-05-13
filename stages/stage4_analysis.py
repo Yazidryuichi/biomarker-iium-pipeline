@@ -946,7 +946,14 @@ def run_stage4(config, full_df):
     ml_results, best_info = run_classification(full_df, config)
 
     # 4C: SHAP on best-performing model/feature-set
-    shap_importance = run_shap_analysis(full_df, config, best_info=best_info)
+    # CI can set SKIP_SHAP=1 to bypass — SHAP's tree explainer can stall on
+    # degenerate-input synthetic fixtures (e.g. CI fair-comparison run was
+    # hanging > 40 min at this step on N=28 synthetic data).
+    if os.environ.get("SKIP_SHAP") == "1":
+        print("  SKIP_SHAP=1 set — skipping SHAP analysis.")
+        shap_importance = pd.DataFrame()
+    else:
+        shap_importance = run_shap_analysis(full_df, config, best_info=best_info)
 
     # Save all results
     output_dir = config["paths"]["output_dir"]
