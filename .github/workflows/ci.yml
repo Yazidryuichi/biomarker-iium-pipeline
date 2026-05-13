@@ -57,8 +57,19 @@ jobs:
           python -m pip install -r requirements.lock
           python -m pip install pytest
 
-      - name: Generate synthetic fixture
-        run: make synthetic-fixture
+      - name: Generate synthetic fixture (small N for CI smoke test)
+        # N=12 instead of N=28 — CI is a smoke test ("does the pipeline run
+        # without crashing"), not a statistical run. On N=28 the pipeline
+        # took 1+ hour in CI runner; N=12 should keep it under 10 min.
+        # 6-per-class minimum is comfortable for the 5-fold stratified CV
+        # (config.yaml `cv_folds: 5` needs ≥5 samples per class to fit).
+        # The fixture generator is identical to the local Makefile target;
+        # only the subject count differs.
+        run: |
+          python tests/generate_synthetic_fixture.py \
+            --out tests/fixtures/synthetic \
+            --n-subjects 12 \
+            --seed 42
 
       - name: Run pipeline end-to-end on fixture
         # set -o pipefail so a non-zero exit from python propagates through tail
