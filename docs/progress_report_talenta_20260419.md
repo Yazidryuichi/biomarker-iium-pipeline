@@ -277,4 +277,4 @@ Rueda, M. R., Fan, J., McCandliss, B. D., et al. (2004). Development of attentio
 
 **Verification note (per citation-check skill):** all numerical values in this report come directly from `results/` files dated 7 April 2026. No rounding: balanced accuracy 0.652 is written as 0.652; r = -0.489 as -0.489. A discrepancy with an earlier internal memory (which named fronto-parietal beta coherence as the top biomarker) has been reconciled — the actual top feature is relative beta power at the posterior-parietal electrodes, not coherence.
 
-> Contact: Yazid (teamdialloai@gmail.com) or the Talenta WhatsApp group for follow-up discussion.
+> Contact: Yazid (yazidburahmen@gmail.com) or the Talenta WhatsApp group for follow-up discussion.
