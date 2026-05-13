@@ -7,6 +7,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancel in-progress runs on the same ref when new commits arrive. Prevents
+# runaway old runs from holding up feedback on the current commit.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
