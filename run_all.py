@@ -4,8 +4,21 @@ Biomarker_IIUM Analysis Pipeline — Main Orchestrator
 
 Runs the full analysis pipeline from raw EDF files to results.
 
+Stages (post-Phase-1 numbering):
+    1. Cleaning (HAPPE-compliant preprocessing)
+    2. Feature extraction (~920 classical QEEG features)
+    3. Behavioural merge
+    4. Statistical analysis + ML + SHAP
+    5. Fair 2x2 comparison (feature set x model class), subject-level LOSO + DeLong
+    6. Density-matrix feature extraction (explicit rho, 900 features at N=15)
+
+DAG ordering note: Stage 5 (fair comparison) consumes Stage 6 (DM feature)
+outputs. In the default "run all stages" flow, the orchestrator runs Stage 6
+BEFORE Stage 5 — the stage number is a stable identifier, not a strict
+execution order.
+
 Usage:
-    # Full pipeline
+    # Full pipeline (runs 1, 2, 3, 4, 6, 5 in that order)
     python run_all.py
 
     # Single stage
@@ -13,6 +26,11 @@ Usage:
     python run_all.py --stage 2
     python run_all.py --stage 3
     python run_all.py --stage 4
+    python run_all.py --stage 5    # fair comparison (requires stage 6 outputs)
+    python run_all.py --stage 6    # density-matrix feature extraction
+
+    # Legacy quantum-cognition exploration (moves to quantum-exploration/ branch)
+    python run_all.py --exploratory-quantum
 
     # Include emotional conditions (in addition to EO/EC)
     python run_all.py --include-emotional
@@ -21,14 +39,13 @@ Usage:
     python run_all.py --subject D0000795
 
 Dependencies:
-    pip install mne autoreject pywavelets scikit-learn xgboost lightgbm
-    pip install shap pandas openpyxl pyyaml scipy statsmodels antropy
-    pip install coffeine pyriemann  # optional: Riemannian classifiers
+    pip install -r requirements.lock  # exact pins via uv pip compile
 """
 
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import time
 
@@ -44,9 +61,9 @@ from stages.stage4_analysis import run_stage4
 
 try:
     from stages.exploratory_quantum import run_quantum_exploration
-    HAS_QUANTUM = True
+    HAS_QUANTUM_LEGACY = True
 except ImportError:
-    HAS_QUANTUM = False
+    HAS_QUANTUM_LEGACY = False
 
 try:
     from stages.stage6_density_matrix import run_stage6
@@ -55,14 +72,34 @@ except ImportError:
     HAS_DENSITY_MATRIX = False
 
 
+def run_stage5_fair_comparison(config):
+    """Stage 5 invokes the fair-comparison analysis script as a subprocess.
+    The script reads from results/ (Stage 4 + Stage 6 outputs) and writes
+    results/stage5_fair_comparison.json.
+    """
+    results_dir = config["paths"]["output_dir"]
+    cmd = [
+        sys.executable, "-m", "stages.stage5_fair_comparison",
+        "--results-dir", results_dir,
+        "--out-json", os.path.join(results_dir, "stage5_fair_comparison.json"),
+    ]
+    subprocess.run(cmd, check=True, cwd=PIPELINE_ROOT)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Biomarker_IIUM EEG Analysis Pipeline"
     )
     parser.add_argument(
         "--stage", type=int, default=None,
-        help="Run specific stage (1-6). 5=quantum exploration, "
-             "6=explicit density-matrix features. Default: run all."
+        help="Run specific stage (1-6). 5=fair comparison (post-pipeline analysis), "
+             "6=explicit density-matrix features. Default: run all stages."
+    )
+    parser.add_argument(
+        "--exploratory-quantum", action="store_true",
+        help="Run the legacy quantum-cognition exploration (QEPP, von Neumann "
+             "entropy on PCA-compressed features). Moves to quantum-exploration/ "
+             "branch in Phase 3. Off by default."
     )
     parser.add_argument(
         "--include-emotional", action="store_true",
@@ -158,18 +195,22 @@ def main():
 
         results = run_stage4(config, full_df)
 
-    # ── Stage 5: Quantum-Inspired Exploration ──
-    if (args.stage is None or args.stage == 5) and HAS_QUANTUM:
-        if args.stage == 5:
+    # ── Optional: Legacy quantum-cognition exploration (Stage 5 pre-Phase-1) ──
+    # Off the main pipeline. Use --exploratory-quantum to invoke. This module
+    # moves to the quantum-exploration/ branch in Phase 3.
+    if args.exploratory_quantum and HAS_QUANTUM_LEGACY:
+        import pandas as pd
+        if "all_epochs" not in locals():
             all_epochs = load_cleaned_epochs(config)
-            import pandas as pd
+        if "full_df" not in locals():
             full_df = pd.read_csv(
                 os.path.join(config["paths"]["output_dir"], "full_dataset.csv")
             )
-
         quantum_df = run_quantum_exploration(config, all_epochs, full_df)
 
     # ── Stage 6: Explicit Density-Matrix Features ──
+    # Executes BEFORE Stage 5 in the default flow because Stage 5
+    # (fair comparison) consumes Stage 6 outputs.
     if (args.stage is None or args.stage == 6) and HAS_DENSITY_MATRIX:
         import pandas as pd
         if args.stage == 6:
@@ -187,6 +228,17 @@ def main():
             quantum_df = locals().get("quantum_df", None)
 
         run_stage6(config, all_epochs, full_df, quantum_df=quantum_df)
+
+    # ── Stage 5: Fair 2x2 comparison (feature set x model class) ──
+    # Post-pipeline analysis. Reads results/ml_results.csv (Stage 4) and the
+    # density-matrix feature outputs (Stage 6) and writes
+    # results/stage5_fair_comparison.json. Subject-level LOSO + paired DeLong
+    # + subject-bootstrap CIs + label-permutation p per cell.
+    if args.stage is None or args.stage == 5:
+        print("\n" + "=" * 60)
+        print("STAGE 5: Fair 2x2 Comparison (feature set x model class)")
+        print("=" * 60)
+        run_stage5_fair_comparison(config)
 
     elapsed = time.time() - start_time
     print(f"\n{'=' * 60}")
