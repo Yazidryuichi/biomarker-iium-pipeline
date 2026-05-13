@@ -18,6 +18,8 @@ cycler==0.12.1
     # via matplotlib
 decorator==5.2.1
     # via mne
+edfio==0.4.13
+    # via -r requirements.txt
 et-xmlfile==2.0.0
     # via openpyxl
 fonttools==4.62.1
@@ -73,6 +75,7 @@ numpy==2.2.6
     #   catboost
     #   coffeine
     #   contourpy
+    #   edfio
     #   h5io
     #   h5py
     #   lightgbm
