@@ -60,7 +60,10 @@ jobs:
             2>&1 | tail -80
 
       - name: Regenerate figures from Stage 5 output
-        run: make figures
+        run: |
+          python generate_figures.py \
+            --results-dir tests/fixtures/synthetic/results \
+            --out-dir tests/fixtures/synthetic/figures
 
       - name: Upload figures as artifact
         uses: actions/upload-artifact@v4

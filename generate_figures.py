@@ -40,21 +40,21 @@ plt.rcParams.update({
     "axes.spines.right": False,
 })
 
-OUT_DIR = os.path.join(os.path.dirname(__file__), "docs", "figures")
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
+DEFAULT_OUT_DIR = os.path.join(os.path.dirname(__file__), "docs", "figures")
+DEFAULT_RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
 
 
-def load_stage5_fair_comparison():
+def load_stage5_fair_comparison(results_dir):
     """Load Phase 1 fair-comparison results (Stage 5)."""
-    path = os.path.join(RESULTS_DIR, "stage5_fair_comparison.json")
+    path = os.path.join(results_dir, "stage5_fair_comparison.json")
     with open(path) as f:
         return json.load(f)
 
 
-def load_shap_from_csv():
+def load_shap_from_csv(results_dir):
     """Load SHAP ranking from Stage 4 output."""
     import pandas as pd
-    path = os.path.join(RESULTS_DIR, "shap_importance.csv")
+    path = os.path.join(results_dir, "shap_importance.csv")
     if not os.path.exists(path):
         return None
     df = pd.read_csv(path)
@@ -348,30 +348,39 @@ def main():
         "--from-pilot", action="store_true",
         help="Use hardcoded SHAP fallback (N=28). Stage 5 JSON still required for AUC figures.",
     )
+    parser.add_argument(
+        "--results-dir", default=DEFAULT_RESULTS_DIR,
+        help="Directory holding stage5_fair_comparison.json + shap_importance.csv. "
+             f"Default: {DEFAULT_RESULTS_DIR}",
+    )
+    parser.add_argument(
+        "--out-dir", default=DEFAULT_OUT_DIR,
+        help=f"Directory to write figure PNGs. Default: {DEFAULT_OUT_DIR}",
+    )
     args = parser.parse_args()
 
-    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(args.out_dir, exist_ok=True)
     print("Generating figures...")
 
     # Stage 5 fair-comparison JSON drives Figure 1 + Figure 2
     try:
-        stage5 = load_stage5_fair_comparison()
+        stage5 = load_stage5_fair_comparison(args.results_dir)
     except FileNotFoundError:
-        print(f"  ERROR: results/stage5_fair_comparison.json not found. "
+        print(f"  ERROR: {args.results_dir}/stage5_fair_comparison.json not found. "
               f"Run `python -m stages.stage5_fair_comparison` first.")
         sys.exit(1)
 
-    fig_fair_comparison_2x2(stage5, OUT_DIR)
-    fig_matched_model_contrast(stage5, OUT_DIR)
+    fig_fair_comparison_2x2(stage5, args.out_dir)
+    fig_matched_model_contrast(stage5, args.out_dir)
 
     # SHAP — prefer Stage 4 CSV, fall back to pilot hardcoded
-    shap_data = None if args.from_pilot else load_shap_from_csv()
+    shap_data = None if args.from_pilot else load_shap_from_csv(args.results_dir)
     if shap_data is None:
         shap_data = get_pilot_shap()
         print("  (SHAP using pilot fallback)")
-    fig_shap_importance(shap_data, OUT_DIR)
+    fig_shap_importance(shap_data, args.out_dir)
 
-    print(f"\nAll figures saved to {OUT_DIR}/")
+    print(f"\nAll figures saved to {args.out_dir}/")
 
 
 if __name__ == "__main__":
