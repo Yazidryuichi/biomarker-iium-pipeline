@@ -31,6 +31,30 @@ AutoReject (Jas et al., 2017) computes data-driven peak-to-peak thresholds. Fall
 
 ## 2. Feature Extraction (Stage 2)
 
+### 2.0 Feature taxonomy (canonical reference)
+
+Stage 2 extracts **922 conventional features per subject per condition**, verified against `results/features.csv` (which has 924 columns: 922 features + `subject_id` + `condition`). The breakdown, by feature-name prefix:
+
+| Prefix | Count | What | Stage 5 `CLASSICAL_PREFIXES` subset |
+|---|---|---|---|
+| `cov_` | 480 | Frequency-band channel covariance entries | ✓ |
+| `cwt_` | 225 | Continuous wavelet transform | — |
+| `psd_` | 120 | 8 bands × 15 channels (abs + rel) | ✓ |
+| `hjorth_` | 45 | 3 Hjorth params (activity, mobility, complexity) × 15 channels | — |
+| `spectral_` | 15 | Spectral entropy (1 per channel) | — |
+| `pac_` | 15 | Phase-amplitude coupling (1 per channel) | — |
+| `coh_` | 12 | Channel-pair coherence (selected pairs) | ✓ |
+| `tbr_` | 5 | Theta/beta ratio (Fz, F3, F4, Cz + frontal mean) | ✓ |
+| `alpha_reactivity` | 4 | Eyes-open vs eyes-closed alpha (posterior channels) | ✓ |
+| `faa_` | 1 | Frontal alpha asymmetry F4-F3 | ✓ |
+| **Total** | **922** | **All Stage 2 conventional features** | **622 used by Stage 5 fair comparison** |
+
+Stage 5's fair 2×2 comparison (§3 of this document and `stages/stage5_fair_comparison.py`) operates on the 622-feature subset matched by `CLASSICAL_PREFIXES = ("psd_", "coh_", "cov_", "tbr_", "faa_", "alpha_reactivity")` — excluding the 300 "advanced" features (cwt_, hjorth_, spectral_, pac_) that are retained in Stage 4's broader 4-feature-set sweep but not in Stage 5's matched comparison. **The 622 vs 922 figures in this document and PIPELINE_STATUS_REPORT.md refer to these two different scopes**; both are correct in their context.
+
+Stage 6 adds a **separate set of 900 density-matrix features per subject per condition** (4 bands × 15² = 900 real entries; see §5). These are stored in `results/density_matrix_features.csv` and used by Stage 5 as the matched-CV alternative to the 622 classical features.
+
+**Grand total per subject per condition: 922 + 900 = 1,822 features**, evaluated under matched preprocessing pipelines.
+
 ### 2.1 Power Spectral Density (PSD)
 
 Welch's method with default MNE parameters. Band power computed via numerical integration:
@@ -302,7 +326,7 @@ with paired DeLong tests on subject-level AUC. The honest verdicts:
 
 - **Under matched linear-SVM**: density-matrix beats classical substantially, ΔAUC = +0.464,
   DeLong p = **0.001**. *However*, the classical+SVM cell sits at AUC = 0.320 — below chance,
-  consistent with high-dimensional overfitting (622 features, k=10 ANOVA selection at N=28) —
+  consistent with high-dimensional overfitting (622-feature classical subset, k=10 ANOVA selection at N=28; see §2.0 for the 622 vs 922 distinction) —
   setting a low bar that the SVM-matched contrast doesn't have to clear high to win. Sensitivity
   work with L1-regularised SVM or smaller-k feature selection is queued.
 - **Under matched shallow-RF**: density-matrix and classical are statistically indistinguishable

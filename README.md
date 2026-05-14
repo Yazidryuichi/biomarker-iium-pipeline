@@ -53,10 +53,11 @@ STAGE 1: Preprocessing (HAPPE-compliant)
     -> 2-second epochs -> AutoReject artefact rejection
     |
     v
-STAGE 2: Feature Extraction (~920 features per subject)
+STAGE 2: Feature Extraction (922 conventional features per subject per condition)
     Conventional QEEG: PSD (Welch, np.trapz integration), TBR, FAA, coherence
     Advanced: wavelet CWT, Hjorth parameters, spectral entropy, phase-amplitude coupling
     Covariance: frequency-band covariance matrices (Riemannian-compatible)
+    [Full feature-count breakdown in METHODS.md §"Feature taxonomy"]
     |
     v
 STAGE 3: Behavioural Data Merge
@@ -103,25 +104,12 @@ Before reading the numbers below, four points apply to everything reported in th
 
 1. **No correlation survives FDR correction at N = 28.** The strongest single correlation (TBR-Cz vs Global EF, Spearman rho = -0.383) has p = 0.044 uncorrected but does not survive Benjamini-Hochberg across the pre-specified test family. This is expected — the study is powered for N = 100, not the pilot.
 2. **No classifier is significantly above chance at N = 28** under permutation testing. The best cells are marginal (p ≈ 0.08-0.12, see "Fair comparison" subsection below). The classification tables presented here are for transparency and method development; they are not claims of biomarker discovery.
-3. **The originally reported 95% bootstrap CIs were too tight.** The 7-classifier × 4-feature-set table below uses per-fold bootstrap CIs (N=100 folds, only 28 actual subjects) that under-represent variance. Subject-level CIs from the Stage 5 fair-comparison rerun are 2-3× wider and should be preferred. See "Fair comparison" below.
+3. **The originally reported 95% bootstrap CIs were too tight.** The 7-classifier × 4-feature-set table (moved to appendix at the end of this section) uses per-fold bootstrap CIs (N=100 folds, only 28 actual subjects) that under-represent variance. Subject-level CIs from the Stage 5 fair-comparison rerun are 2-3× wider and should be preferred. The headline below leads with that fair comparison.
 4. **All claims here are pilot-scale.** We expect to revisit at the target N. Where a finding cuts against canonical practice (e.g., the dominance of posterior-parietal relative beta over the frontal TBR), the right reading is "the pre-specified TBR hypothesis did not find support at the pilot N," not "TBR has been refuted."
 
 ### Correlations
 
 TBR at Cz shows the strongest pre-specified association with Global EF: Spearman rho = -0.383, p = .044 uncorrected, with effect direction consistent with prior literature (higher TBR corresponds to lower executive function). The conversion to Cohen's d (d = 2·rho / √(1-rho²) = -0.83) is reported for comparability with prior QEEG-EF work but is non-standard for correlation effect sizes and should be read as a rough magnitude indicator only. **No correlations survive FDR correction at this sample size.**
-
-### Classification (7-model × 4-feature-set sweep, per-fold reporting — kept for method-development transparency)
-
-| Feature Set | Best Model | Balanced Accuracy [per-fold 95% CI] | AUC |
-|-------------|-----------|-------------------------------------|-----|
-| Conventional QEEG | XGBoost | 0.636 [0.587 - 0.687] | 0.677 |
-| Conventional + Advanced | MLP | 0.636 [0.590 - 0.683] | 0.637 |
-| Covariance | RandomForest | 0.618 [0.568 - 0.667] | 0.625 |
-| All features | RandomForest | 0.587 [0.545 - 0.629] | 0.590 |
-
-*Per-fold balanced accuracy across 7 classifiers and 4 feature sets. XGBoost on conventional QEEG features achieves 0.636. The pilot-stage target of 0.75 is not met at N = 28 and was a power-mismatched target to begin with.* **The bracketed CIs above are per-fold bootstrap CIs and are too tight; the Stage 5 fair-comparison subject-level CIs (~0.20-0.35 wide) are the honest version. The 2x2 fair-comparison figure (Stage 5) is shown below.**
-
-**Permutation test:** p = 0.149 for the best per-fold mean BAcc — not statistically significant at N = 28. The best model performs above the permutation mean (0.494), but the permutation p-value is the headline; the SHAP-based biomarker rankings below should be read as candidate features for the target-N rerun, not as established biomarkers.
 
 ### Fair comparison (Stage 5) — density-matrix features vs classical QEEG features, matched 2×2 design
 
@@ -186,6 +174,21 @@ Expected outcomes (to be filled in after the rerun lands):
 | classical+lr_elasticnet | TBD | TBD | hybrid regularisation |
 
 If L1 lifts classical above chance, the matched-SVM DM-advantage narrative weakens. If L1 stays below chance, the DM advantage is robust to regularisation choice and the original DeLong p=0.001 reads as a real feature-representation gap.
+
+#### Appendix: original 7-model × 4-feature-set sweep (per-fold reporting — superseded; kept for method-development transparency)
+
+The original Stage 4 sweep below uses **per-fold bootstrap CIs (100 folds, 28 actual subjects)** which under-represent variance by a factor of √(100/28) ≈ 1.9. The Stage 5 fair-comparison subject-level CIs above (~0.20–0.35 wide) are the honest version. This appendix is retained because the per-fold mean BAccs informed the original method development and the SHAP rankings below still consume them.
+
+| Feature Set | Best Model | Balanced Accuracy [per-fold 95% CI — too tight] | AUC |
+|-------------|-----------|-------------------------------------|-----|
+| Conventional QEEG | XGBoost | 0.636 [0.587 - 0.687] | 0.677 |
+| Conventional + Advanced | MLP | 0.636 [0.590 - 0.683] | 0.637 |
+| Covariance | RandomForest | 0.618 [0.568 - 0.667] | 0.625 |
+| All features | RandomForest | 0.587 [0.545 - 0.629] | 0.590 |
+
+*Per-fold balanced accuracy across 7 classifiers and 4 feature sets. XGBoost on conventional QEEG features achieves 0.636. The pilot-stage target of 0.75 is not met at N = 28 and was a power-mismatched target to begin with.*
+
+**Permutation test:** p = 0.149 for the best per-fold mean BAcc — not statistically significant at N = 28. The best model performs above the permutation mean (0.494), but the permutation p-value is the headline; the SHAP-based biomarker rankings below should be read as candidate features for the target-N rerun, not as established biomarkers.
 
 ### Biomarker Candidates (SHAP Feature Importance — exploratory, conditional on the underlying classifier)
 
@@ -258,7 +261,7 @@ biomarker-iium-pipeline/
     config.yaml              # All analysis parameters
   stages/
     stage1_cleaning.py       # EEG preprocessing
-    stage2_features.py       # Feature extraction (920 features)
+    stage2_features.py       # Feature extraction (922 conventional features)
     stage3_merge.py          # Behavioural data integration
     stage4_analysis.py       # Statistics, ML, SHAP
     stage5_fair_comparison.py # 2x2 fair comparison (feature x model), LOSO + DeLong
