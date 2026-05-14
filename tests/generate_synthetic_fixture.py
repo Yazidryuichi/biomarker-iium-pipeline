@@ -1,9 +1,10 @@
 """Generate a synthetic fixture matching the Biomarker_IIUM pipeline schema.
 
-Produces 28 fake subjects with:
-  - EDF files (15 channels, 250 Hz, ~30 s) of gaussian noise plus
-    a faint alpha-band sine, so Stage 1 cleaning has something to do
-    and Stage 2 feature extraction produces sensible PSD output.
+Produces fake subjects with:
+  - EDF files (15 channels, 250 Hz, duration configurable via --duration)
+    of gaussian noise plus a faint alpha-band sine, so Stage 1 cleaning
+    has something to do and Stage 2 feature extraction produces sensible
+    PSD output.
   - AUFEI-O / Flanker / Digit Span xlsx files with valid column schemas
     and plausible value ranges.
 
@@ -15,7 +16,11 @@ Run:
     python tests/generate_synthetic_fixture.py \
         --out tests/fixtures/synthetic \
         --n-subjects 28 \
+        --duration 30 \
         --seed 42
+
+CI uses --duration 10 to keep Stage 6 density-matrix compute under the
+GH-Actions runner timeout; real-data and reviewer runs use 30+.
 
 After generation, run the pipeline against the fixture:
     python run_all.py \
@@ -40,10 +45,13 @@ CHANNELS = [
 ]
 SFREQ = 250
 DURATION_S = 30
-N_SAMPLES = SFREQ * DURATION_S
 
 
-def make_signal(rng: np.random.Generator, ef_level: float) -> np.ndarray:
+def make_signal(
+    rng: np.random.Generator,
+    ef_level: float,
+    duration_s: int = DURATION_S,
+) -> np.ndarray:
     """One subject's multichannel signal.
 
     Real EEG has substantial inter-channel correlation from volume conduction
@@ -57,19 +65,23 @@ def make_signal(rng: np.random.Generator, ef_level: float) -> np.ndarray:
     `ef_level` in [0, 1] modulates the alpha-band component on posterior
     channels and gives the classifier something to find. Values are in volts;
     MNE expects volts.
+
+    `duration_s` controls signal length in seconds. CI uses 10 s to keep the
+    Stage 6 density-matrix computation tractable; real-data runs use 30+ s.
     """
     n_ch = len(CHANNELS)
-    t = np.arange(N_SAMPLES) / SFREQ
+    n_samples = SFREQ * duration_s
+    t = np.arange(n_samples) / SFREQ
 
     # Local idiosyncratic noise (15 µV RMS per channel).
-    local = rng.standard_normal((n_ch, N_SAMPLES)) * 15e-6
+    local = rng.standard_normal((n_ch, n_samples)) * 15e-6
 
     # Shared cortical sources: a few broadband + a few rhythmic components.
     # Each channel mixes each source with a random positive weight.
     n_sources = 4
-    sources = np.zeros((n_sources, N_SAMPLES))
-    sources[0] = rng.standard_normal(N_SAMPLES) * 25e-6  # broadband noise source
-    sources[1] = rng.standard_normal(N_SAMPLES) * 20e-6  # second broadband source
+    sources = np.zeros((n_sources, n_samples))
+    sources[0] = rng.standard_normal(n_samples) * 25e-6  # broadband noise source
+    sources[1] = rng.standard_normal(n_samples) * 20e-6  # second broadband source
     sources[2] = 8e-6 * np.sin(2 * np.pi * 6.0 * t)      # 6 Hz theta
     sources[3] = 10e-6 * np.sin(2 * np.pi * 18.0 * t)    # 18 Hz beta
     # Mixing matrix with positive entries so all channels share the sources.
@@ -89,9 +101,9 @@ def make_signal(rng: np.random.Generator, ef_level: float) -> np.ndarray:
     sig[frontal, :] += drift[np.newaxis, :]
 
     # Occasional blink-like artefacts in Fp1/Fp2.
-    blink_times = rng.choice(N_SAMPLES, size=4, replace=False)
+    blink_times = rng.choice(n_samples, size=4, replace=False)
     for ts in blink_times:
-        a, b = max(ts - 50, 0), min(ts + 50, N_SAMPLES)
+        a, b = max(ts - 50, 0), min(ts + 50, n_samples)
         sig[frontal, a:b] += 100e-6 * np.hanning(b - a)
     return sig
 
@@ -164,6 +176,12 @@ def main():
                         help="Output directory for fixture.")
     parser.add_argument("--n-subjects", type=int, default=28)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--duration", type=int, default=DURATION_S,
+                        help=(
+                            f"Per-recording duration in seconds (default {DURATION_S}). "
+                            "CI uses 10 to keep Stage 6 density-matrix compute under "
+                            "the runner timeout; real-data runs use 30+."
+                        ))
     parser.add_argument("--include-emotional", action="store_true",
                         help="Generate emotional condition files in addition to EO/EC.")
     args = parser.parse_args()
@@ -192,7 +210,7 @@ def main():
         subj_dir.mkdir(exist_ok=True)
         ef_level = float(rng.uniform(0.2, 0.9))
         for cond in conditions:
-            data = make_signal(rng, ef_level)
+            data = make_signal(rng, ef_level, duration_s=args.duration)
             fname = f"1_{sexes[i]}_1_Subject{i + 1:02d}_IGS_{cond}.edf"
             write_edf(subj_dir / fname, data)
         if (i + 1) % 5 == 0:
@@ -231,6 +249,7 @@ def main():
 
     print(f"\nFixture written to {out}")
     print(f"  Subjects: {args.n_subjects}")
+    print(f"  Duration: {args.duration} s per recording")
     print(f"  Conditions: {conditions}")
     print(f"  Config: {cfg}")
     print(f"\nRun pipeline:")

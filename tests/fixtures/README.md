@@ -18,11 +18,14 @@ inputs in shape, schema, and value ranges, but contains no real subjects.
 python tests/generate_synthetic_fixture.py \
     --out tests/fixtures/synthetic \
     --n-subjects 28 \
+    --duration 30 \
     --seed 42
 ```
 
 Adds `--include-emotional` to also generate the four emotional-condition
-EDF files per subject.
+EDF files per subject. CI uses `--duration 10` to keep Stage 6
+density-matrix compute under the runner timeout; reviewer / real-data
+runs use 30+.
 
 ## What the fixture contains
 
