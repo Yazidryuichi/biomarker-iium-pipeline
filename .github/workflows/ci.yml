@@ -104,10 +104,18 @@ jobs:
             2>&1 | tail -200
 
       - name: Regenerate figures from Stage 5 output
+        # generate_figures.py requires stage5_fair_comparison.json (all
+        # 3 figures it produces depend on Stage 5 outputs). When SKIP_STAGE5=1
+        # that file is absent by design — skip the figure step too rather
+        # than failing CI. Real-data runs always have Stage 5 outputs.
         run: |
-          python generate_figures.py \
-            --results-dir tests/fixtures/synthetic/results \
-            --out-dir tests/fixtures/synthetic/figures
+          if [ -f tests/fixtures/synthetic/results/stage5_fair_comparison.json ]; then
+            python generate_figures.py \
+              --results-dir tests/fixtures/synthetic/results \
+              --out-dir tests/fixtures/synthetic/figures
+          else
+            echo "stage5_fair_comparison.json absent (Stage 5 was skipped); skipping figure regeneration."
+          fi
 
       - name: Upload figures as artifact
         uses: actions/upload-artifact@v4
