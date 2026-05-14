@@ -158,13 +158,19 @@ The classical+svm_linear cell's LOSO AUC = 0.32 is consistent with L2-SVC overfi
 Run:
 
 ```bash
+# 1. Run Stage 5 with the L1 sensitivity cells appended:
 python -m stages.stage5_fair_comparison \
     --results-dir results \
     --out-json results/stage5_fair_comparison.json \
     --include-l1-sensitivity
+
+# 2. Auto-fill the table below from the new JSON:
+python scripts/update_l1_table.py
 ```
 
-Expected outcomes (to be filled in after the rerun lands):
+The helper script ([`scripts/update_l1_table.py`](scripts/update_l1_table.py)) is idempotent: rerunning produces the same output. Use `--dry-run` to preview the proposed table without modifying the README.
+
+Expected outcomes (placeholder — `scripts/update_l1_table.py` rewrites this table once Stage 5 has produced an `--include-l1-sensitivity` run):
 
 | Cell | LOSO AUC [95% CI] | DeLong p vs DM+svm_linear | Reading |
 |---|---|---|---|
