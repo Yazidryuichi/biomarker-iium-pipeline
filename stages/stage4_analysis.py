@@ -154,6 +154,10 @@ def get_feature_sets(df, config):
     """
     Define feature sets for comparison.
     Returns dict: {set_name: list of column names}
+
+    Optional config-driven filter: if `ml.feature_sets` is a non-empty list,
+    keep only the named sets. Unknown names are skipped with a warning so
+    a typo doesn't silently produce empty results.
     """
     all_cols = df.columns.tolist()
 
@@ -172,12 +176,34 @@ def get_feature_sets(df, config):
     all_features = conventional + [c for c in all_cols if any(c.startswith(p) for p in
                    ["cwt_", "hjorth_", "spectral_entropy_", "pac_", "cov_"])]
 
-    return {
+    feature_sets = {
         "conventional_qeeg": conventional,
         "conventional_plus_advanced": advanced,
         "covariance_only": covariance,
         "all_features": all_features,
     }
+
+    # Optional config-driven selector. Strip inline YAML comments so users
+    # can leave explanatory comments next to each entry in config.yaml.
+    requested = (config.get("ml", {}) or {}).get("feature_sets")
+    if requested:
+        requested = [s.split("#")[0].strip() for s in requested if s]
+        unknown = [s for s in requested if s not in feature_sets]
+        if unknown:
+            print(f"  [WARN] ml.feature_sets entries not recognised, "
+                  f"skipping: {unknown}")
+        feature_sets = {k: v for k, v in feature_sets.items() if k in requested}
+        if not feature_sets:
+            print("  [WARN] ml.feature_sets filter eliminated ALL sets; "
+                  "falling back to the full default lineup")
+            feature_sets = {
+                "conventional_qeeg": conventional,
+                "conventional_plus_advanced": advanced,
+                "covariance_only": covariance,
+                "all_features": all_features,
+            }
+
+    return feature_sets
 
 
 def _build_models(random_state):

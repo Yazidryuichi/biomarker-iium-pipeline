@@ -322,7 +322,8 @@ def clean_single_file(filepath, config, subject_id, condition):
         qc["mean_amplitude_uv"] = 0
         qc["std_amplitude_uv"] = 0
 
-    qc["status"] = "OK" if len(epochs_clean) >= 10 else "LOW_EPOCH_COUNT"
+    min_epochs = config["cleaning"].get("min_epochs", 10)
+    qc["status"] = "OK" if len(epochs_clean) >= min_epochs else "LOW_EPOCH_COUNT"
 
     return epochs_clean, qc
 
@@ -370,22 +371,35 @@ def run_stage1(config, subjects, conditions=None):
                 epochs, qc = clean_single_file(
                     filepath, config, subject_id, condition
                 )
-                all_epochs[(subject_id, condition)] = epochs
 
-                # Save cleaned epochs
-                epoch_fname = f"{subject_id}_{condition}-epo.fif"
-                epochs.save(
-                    os.path.join(output_dir, epoch_fname),
-                    overwrite=True,
-                    verbose=False,
-                )
+                # Drop recordings with too few surviving epochs (configurable via
+                # cleaning.min_epochs; default 10). Such recordings would bias
+                # PSD/coherence estimates downstream.
+                if qc.get("status") == "LOW_EPOCH_COUNT":
+                    floor = config["cleaning"].get("min_epochs", 10)
+                    print(
+                        f"  DROP: {qc['n_epochs_after_reject']} epochs "
+                        f"(<{floor} floor), "
+                        f"{qc.get('pct_epochs_dropped', 0):.0%} rejected — "
+                        f"recording skipped (will be invisible to Stage 2+)"
+                    )
+                else:
+                    all_epochs[(subject_id, condition)] = epochs
 
-                print(
-                    f"  OK: {qc['n_epochs_after_reject']} epochs "
-                    f"({qc['pct_epochs_dropped']:.0%} rejected), "
-                    f"{qc['n_bad_channels']} bad ch, "
-                    f"{qc['n_ica_excluded']} ICA excluded"
-                )
+                    # Save cleaned epochs
+                    epoch_fname = f"{subject_id}_{condition}-epo.fif"
+                    epochs.save(
+                        os.path.join(output_dir, epoch_fname),
+                        overwrite=True,
+                        verbose=False,
+                    )
+
+                    print(
+                        f"  OK: {qc['n_epochs_after_reject']} epochs "
+                        f"({qc['pct_epochs_dropped']:.0%} rejected), "
+                        f"{qc['n_bad_channels']} bad ch, "
+                        f"{qc['n_ica_excluded']} ICA excluded"
+                    )
 
             except Exception as e:
                 qc = {

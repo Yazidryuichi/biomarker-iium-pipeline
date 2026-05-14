@@ -46,6 +46,11 @@ cleaning:
   # Conservative rejection (SCCN recommendation for small N)
   max_reject_pct: 0.30  # reject max 30% of epochs
   bad_channel_threshold: 3.0  # z-score
+  # Minimum surviving-epoch floor. Recordings with fewer surviving epochs
+  # are flagged LOW_EPOCH_COUNT and SKIPPED at save time so downstream stages
+  # never see them. Set to 60 for paper-ready runs (recommended); 10 is the
+  # legacy soft default that lets near-empty recordings through.
+  min_epochs: 10
 
 features:
   # Frequency bands
@@ -74,6 +79,14 @@ ml:
   cv_repeats: 10
   random_state: 42
   test_size: 0.2
+
+  # Optional feature-set selector (Stage 4). Uncomment + edit to evaluate
+  # only a subset. Available sets: conventional_qeeg, conventional_plus_advanced,
+  # covariance_only, all_features. Leave commented out to evaluate all 4.
+  # feature_sets:
+  #   - conventional_qeeg
+  #   - covariance_only
+
   models:
     - RandomForest
     - XGBoost

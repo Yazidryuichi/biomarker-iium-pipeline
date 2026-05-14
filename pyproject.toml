@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "biomarker-iium"
-version = "0.2.0"
+version = "0.3.0"
 description = "QEEG biomarker candidate identification pipeline for executive function in Indonesian children"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    {name = "Dandy Aulya"},
     {name = "Yazid Ryuichi Habiburahman"},
+    {name = "Dandy Aulya"},
 ]
 keywords = ["EEG", "QEEG", "biomarker", "executive-function", "machine-learning", "neuroscience"]
 classifiers = [
