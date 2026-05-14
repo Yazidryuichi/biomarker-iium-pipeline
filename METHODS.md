@@ -224,7 +224,11 @@ stability_CV = std(|shap_k|) / mean(|shap_k|)
 
 Features with CV < 0.5 labeled "stable"; otherwise "unstable."
 
-## 4. Quantum-Inspired Features (Stage 5, Exploratory)
+## 4. Non-Linear Feature Transforms (Stage 5 legacy, `quantum-exploration` branch)
+
+The features in this section were originally framed as "quantum-inspired" — a marketing label that obscures what they actually are: non-linear transforms of multichannel covariance matrices (von Neumann entropy of a normalised covariance, Hilbert-Schmidt similarity, etc.), classically computed in standard Python with no quantum hardware involved. Per the 2026-05-13 Phase 1 honest-headline reframe, the canonical main-branch framing is **"covariance density matrix features"** (Stage 6, §5 of this document); whether the quantum-mechanical motivation adds interpretive value beyond non-linear feature engineering is an open theoretical question retained on the `quantum-exploration/` branch for future strengthening at the target N=100.
+
+The Stage 5 implementations below remain on main (gated behind `--exploratory-quantum`) because the QSVM/QEPP code was the original entry point for this exploration. Stage 6 is the explicit version that produces the headline DM features.
 
 ### 4.1 QEPP (Quantum Entangled Particles Pattern)
 

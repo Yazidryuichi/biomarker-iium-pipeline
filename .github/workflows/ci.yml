@@ -16,23 +16,40 @@ concurrency:
 permissions:
   contents: read
 
+# Opt in to Node.js 24 early so we don't get surprised by the June 2 2026 forced
+# switch (when GitHub will force JavaScript actions to Node.js 24 by default).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   test-unit:
-    name: Unit tests (density-matrix invariants)
+    name: Unit tests (density-matrix invariants) — Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install pinned dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.lock
+          # requirements.lock is pinned for Python 3.12 (uv pip compile output).
+          # On 3.13 some pins may need transitive resolution; use --no-deps + the
+          # range file to let pip pick 3.13-compatible wheels where the lock is
+          # too strict. Falls back cleanly on 3.12.
+          if [ "${{ matrix.python-version }}" = "3.12" ]; then
+            python -m pip install -r requirements.lock
+          else
+            python -m pip install -r requirements.txt
+          fi
           python -m pip install pytest
 
       - name: Run unit tests
@@ -42,8 +59,11 @@ jobs:
     name: End-to-end pipeline against synthetic fixture
     runs-on: ubuntu-latest
     needs: test-unit
+    # e2e is the long pole (~12 min). Keep it on the single pinned Python 3.12
+    # against requirements.lock for reproducibility; Python 3.13 compatibility
+    # is covered by the unit-test matrix above.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5

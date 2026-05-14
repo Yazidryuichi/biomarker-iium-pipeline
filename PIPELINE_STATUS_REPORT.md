@@ -1,8 +1,10 @@
 # Biomarker_IIUM Pipeline — Status Report for Dandy
 
+> **Historical snapshot — 7 April 2026, predates Phase 1 honest-reframe + public release.** Repo URL and "private" status are stale: the repo moved to <https://github.com/Yazidryuichi/biomarker-iium-pipeline> and is public since 24 April 2026. Numbers and terminology ("quantum-inspired") in this report match the pre-Phase-1 framing; current canonical state is in [README.md](README.md) and [METHODS.md](METHODS.md). Retained for historical record of the April pilot snapshot.
+
 **Date:** 7 April 2026
 **From:** Yazid
-**Repo:** https://github.com/Ladykiller101/biomarker-iium-pipeline (private)
+**Repo:** https://github.com/Yazidryuichi/biomarker-iium-pipeline (now public)
 **Your access:** Invited as collaborator (`dndyzz`) — please accept the invite if you haven't.
 
 ---

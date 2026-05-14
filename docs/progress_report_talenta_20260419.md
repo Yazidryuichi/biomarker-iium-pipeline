@@ -1,5 +1,8 @@
 # Biomarker_IIUM Progress Report — Methodology, Pipeline, and Current Results
 
+> **Historical snapshot — predates the 2026-05-13 Phase 1 honest-headline reframe.**
+> This document was written 19 Apr 2026 against the pre-Phase-1 analysis (per-fold reporting, "quantum-inspired" framing for Stage 5). The current canonical headlines are in [README.md](../README.md) (Fair comparison 2×2, subject-level LOSO, DeLong tests) and [METHODS.md §2.0](../METHODS.md) (feature taxonomy). The numbers reported below — e.g. CNN-LSTM 0.652 / AUC 0.743 — describe the original 7-model × 4-feature-set sweep and remain available in the README appendix; the headline DM-SVM AUC = 0.785 with subject-bootstrap CIs supersedes them. The "quantum-inspired" terminology used throughout this report has been replaced in current docs with "covariance density matrix features" (non-linear classical feature transforms). Retained as historical record of the April pilot snapshot.
+
 **Study title:** Early Development of Executive-Dysfunction Biomarkers Using Quantitative EEG — A Machine-Learning Approach in Indonesian Children Aged 6–12
 
 **Institution:** Talenta Center, Yayasan Bina Talenta Tunas Bangsa Karya Mandiri
