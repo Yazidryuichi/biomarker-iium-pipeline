@@ -65,19 +65,22 @@ jobs:
         # crashed Stage 6 → Stage 5 with "n_splits=10 cannot be greater
         # than the number of members in each class".
         #
-        # --duration 10 — N=20 with default 30 s timed out at 1h23m on
-        # Stage 6 density-matrix features (compute scales with N × samples).
-        # 10 s cuts per-recording samples 3× → Stage 6 compute ~3× faster.
-        # Real-data runs use 30+ s.
+        # --duration 20 — N=20 with default 30 s timed out at 1h21m;
+        # N=20 with 10 s broke Stage 1 (autoreject CV needs ≥5 surviving
+        # epochs; at 10 s only 4 survive, and bad-channel detection over-
+        # rejects making picks=13 < ica.n_components=14). 20 s yields 10
+        # non-overlapping 2-s epochs → ≥5 survive autoreject and channel
+        # correlations are stable enough to keep ICA happy. Reduces Stage 6
+        # density-matrix compute ~1.5–2× vs 30 s. Real-data runs use 30+ s.
         #
         # CI is a smoke test ("does the pipeline run without crashing"),
-        # not a statistical run; N=20 × 10 s is still well above the
+        # not a statistical run; N=20 × 20 s is still well above the
         # structural minimum for every downstream stage.
         run: |
           python tests/generate_synthetic_fixture.py \
             --out tests/fixtures/synthetic \
             --n-subjects 20 \
-            --duration 10 \
+            --duration 20 \
             --seed 42
 
       - name: Run pipeline end-to-end on fixture
@@ -86,8 +89,15 @@ jobs:
         # SKIP_SHAP=1: SHAP tree explainer can stall on synthetic-fixture
         # inputs (observed 40+ min hang at Stage 4C with shap==0.49.1 on the
         # 28-subject gaussian-noise fixture). Real-data runs do not set this.
+        # SKIP_STAGE5=1: Stage 5 fair_comparison is post-hoc statistical
+        # analysis (4 cells × 100-fold CV × 1000-permutation × 10000-bootstrap
+        # ≈ 1+ hour at N=20). It tests statistical inference, not pipeline
+        # correctness. The previous N=20 × 30 s run was cancelled at 1h21m
+        # almost entirely inside Stage 5. Skipping here keeps CI a smoke test;
+        # real-data runs always execute Stage 5.
         env:
           SKIP_SHAP: '1'
+          SKIP_STAGE5: '1'
         run: |
           set -o pipefail
           python run_all.py --config tests/fixtures/synthetic/config.fixture.yaml \

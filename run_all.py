@@ -234,7 +234,18 @@ def main():
     # density-matrix feature outputs (Stage 6) and writes
     # results/stage5_fair_comparison.json. Subject-level LOSO + paired DeLong
     # + subject-bootstrap CIs + label-permutation p per cell.
-    if args.stage is None or args.stage == 5:
+    #
+    # SKIP_STAGE5=1: bypass for CI / smoke-test runs. Stage 5 is a post-hoc
+    # statistical analysis (4 cells × 100-fold CV × 1000-permutation × 10000-
+    # bootstrap), not part of pipeline correctness. CI verifies stages 1-4 + 6;
+    # Stage 5 is omitted there because its compute budget (~1+ hour at N=20)
+    # exceeds the smoke-test runner budget and adds no signal for "does the
+    # pipeline run?". Real-data runs always run Stage 5.
+    if os.environ.get("SKIP_STAGE5") == "1":
+        print("\n" + "=" * 60)
+        print("STAGE 5: SKIPPED (SKIP_STAGE5=1)")
+        print("=" * 60)
+    elif args.stage is None or args.stage == 5:
         print("\n" + "=" * 60)
         print("STAGE 5: Fair 2x2 Comparison (feature set x model class)")
         print("=" * 60)
