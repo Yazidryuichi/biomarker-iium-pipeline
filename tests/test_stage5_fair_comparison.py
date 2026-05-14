@@ -94,12 +94,20 @@ def test_make_pipeline_structure():
 
 
 def test_per_fold_returns_correct_shape():
-    """_evaluate_per_fold returns one BAcc + one AUC per fold."""
+    """_evaluate_per_fold returns one BAcc + one AUC per fold.
+
+    Splits must be stratified — `_make_mock_dataset` lays out class 0 in
+    indices [0, n/2) and class 1 in [n/2, n), so train sets that include
+    ONLY low or ONLY high indices contain a single class and SVC errors.
+    """
     X, y = _make_mock_dataset(n_subjects=20)
-    splits = [(np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
-               np.array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19])),
-              (np.array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
-               np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))]
+    # Stratified 2-fold: each fold has 5 of each class in train + test
+    splits = [
+        (np.array([0, 1, 2, 3, 4, 10, 11, 12, 13, 14]),
+         np.array([5, 6, 7, 8, 9, 15, 16, 17, 18, 19])),
+        (np.array([5, 6, 7, 8, 9, 15, 16, 17, 18, 19]),
+         np.array([0, 1, 2, 3, 4, 10, 11, 12, 13, 14])),
+    ]
     factory = _model_factory("svm_linear")
     accs, aucs = _evaluate_per_fold(X, y, factory, splits)
     assert accs.shape == (2,)
@@ -164,18 +172,25 @@ def test_delong_identical_classifiers_high_p():
 
 
 def test_subject_bootstrap_ci_bounds():
-    """Subject-bootstrap CI returns (point_est, lo, hi) with lo <= point <= hi."""
+    """Subject-bootstrap CI returns (point_est, lo, hi) with lo <= point <= hi.
+
+    Uses overlapping proba ranges (rather than perfectly separated) so
+    bootstrap resampling produces AUC variance — perfect separation gives
+    AUC=1.0 every resample and the CI collapses to zero width, which is
+    correct but not informative as a sanity check.
+    """
     rng = np.random.default_rng(0)
     y = np.array([0] * 10 + [1] * 10)
-    # Good classifier: probas correlated with labels
-    proba = np.where(y == 1, rng.uniform(0.6, 0.9, size=20),
-                     rng.uniform(0.1, 0.4, size=20))
+    # Good-but-not-perfect classifier: overlapping probas
+    proba = np.where(y == 1, rng.uniform(0.3, 0.9, size=20),
+                     rng.uniform(0.1, 0.7, size=20))
     auc, lo, hi = _subject_bootstrap_ci(proba, y, n_boot=200)
     assert 0 <= lo <= auc <= hi <= 1, (
         f"Bootstrap CI ordering violated: lo={lo}, auc={auc}, hi={hi}"
     )
-    # CI width should be reasonable (not zero, not the full range)
-    assert hi - lo > 0.01
+    # Width should be non-degenerate at this overlap level
+    assert hi - lo > 0.01, f"CI width too tight (lo={lo}, hi={hi}); test " \
+                            "fixture's overlap may be too small"
 
 
 def test_subject_bootstrap_bacc_ci_bounds():
