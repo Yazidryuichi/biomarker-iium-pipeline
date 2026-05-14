@@ -33,14 +33,32 @@ Statistical rules:
     p-value reports whether each cell beats chance.
 
 Run:
+    # Canonical 2x2:
     python -m stages.stage5_fair_comparison \
         --results-dir results \
         --out-json results/stage5_fair_comparison.json
 
+    # With L1-regularisation sensitivity (P0.1):
+    python -m stages.stage5_fair_comparison \
+        --results-dir results \
+        --out-json results/stage5_fair_comparison.json \
+        --include-l1-sensitivity
+
 Writes:
-    results/stage5_per_fold.csv      (per-fold BAcc + AUC, all 4 cells)
+    results/stage5_per_fold.csv      (per-fold BAcc + AUC, all cells)
     results/stage5_per_subject.csv   (LOSO predicted probability per subject)
     results/stage5_fair_comparison.json  (consolidated stats + CIs + DeLong)
+
+Sensitivity cells (when --include-l1-sensitivity):
+    classical+svm_l1         LinearSVC with L1 penalty (calibrated sigmoid)
+    classical+lr_l1          LogisticRegression L1
+    classical+lr_elasticnet  LogisticRegression elasticnet (l1_ratio=0.5)
+
+The motivating question: the canonical classical+svm_linear cell produced
+LOSO AUC = 0.32 (below chance) at N=28, which the README reads as overfitting
+of L2-SVC on top-10 SelectKBest. If L1 regularisation lifts classical above
+chance, the matched-SVM DM-vs-Classical DeLong p=0.001 gap may narrow. If L1
+stays below chance, the gap is robust to regularisation choice.
 """
 
 from __future__ import annotations
@@ -55,14 +73,16 @@ from typing import Iterable, Tuple
 import numpy as np
 import pandas as pd
 from scipy.stats import norm, wilcoxon
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
                                      StratifiedKFold)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
 
 CLASSICAL_PREFIXES = ("psd_", "coh_", "cov_", "tbr_", "faa_", "alpha_reactivity")
 TARGET = "ef_group_global"
@@ -296,6 +316,33 @@ def _model_factory(kind: str):
     if kind == "rf_shallow":
         return lambda: RandomForestClassifier(n_estimators=200, max_depth=3,
                                               random_state=SEED)
+    # L1-regularised variants (--include-l1-sensitivity opt-in).
+    # Each runs through the same SelectKBest(k=10) + StandardScaler pipeline
+    # as the baseline cells — apples-to-apples sensitivity: only the model
+    # class differs. The motivating question is whether the Classical+SVM-linear
+    # cell's LOSO AUC = 0.32 (below chance) reflects an artifact of L2-SVC
+    # overfitting on top-10 SelectKBest at N=28, or a deeper limitation of
+    # classical features. If L1 lifts classical above chance, the
+    # matched-SVM DM-vs-Classical DeLong gap may narrow; if L1 stays below
+    # chance, the gap is robust to regularisation choice.
+    if kind == "svm_l1":
+        # LinearSVC with L1 penalty needs dual=False. No native predict_proba,
+        # so wrap with sigmoid calibration via 3-fold inner CV.
+        return lambda: CalibratedClassifierCV(
+            LinearSVC(penalty="l1", dual=False, C=1.0,
+                      random_state=SEED, max_iter=5000),
+            method="sigmoid", cv=3,
+        )
+    if kind == "lr_l1":
+        return lambda: LogisticRegression(
+            penalty="l1", solver="liblinear", C=1.0,
+            random_state=SEED, max_iter=2000,
+        )
+    if kind == "lr_elasticnet":
+        return lambda: LogisticRegression(
+            penalty="elasticnet", solver="saga", l1_ratio=0.5, C=1.0,
+            random_state=SEED, max_iter=5000,
+        )
     raise ValueError(f"unknown model kind: {kind}")
 
 
@@ -322,6 +369,13 @@ def main() -> int:
                         help="Optional: also write the JSON to a portfolio "
                              "asset path so the portfolio + repo stay in sync.")
     parser.add_argument("--n-perm", type=int, default=N_PERM)
+    parser.add_argument("--include-l1-sensitivity", action="store_true",
+                        help=("Append 3 L1-regularised sensitivity cells on the "
+                              "classical feature set (svm_l1, lr_l1, lr_elasticnet). "
+                              "Default off to preserve the canonical 2x2 grid; "
+                              "set this to investigate whether L1 regularisation "
+                              "lifts Classical+SVM out of the below-chance LOSO AUC "
+                              "0.32 at N=28."))
     args = parser.parse_args()
 
     results_dir = args.results_dir.resolve()
@@ -342,6 +396,19 @@ def main() -> int:
             name = f"{fset_name}+{model}"
             print(f"  running {name} ...", file=sys.stderr)
             cells.append(_run_cell(name, fset_name, model, X, y, splits))
+
+    # Optional L1-regularised sensitivity cells (classical features only).
+    # Triggered by --include-l1-sensitivity. The classical+svm_linear baseline
+    # produced LOSO AUC = 0.32 (below chance) at N=28 — this rerun tests
+    # whether L1 regularisation lifts the classical baseline. If it does,
+    # the matched-SVM DM-vs-Classical DeLong gap may narrow.
+    if args.include_l1_sensitivity:
+        print("  --include-l1-sensitivity ON: running 3 additional cells",
+              file=sys.stderr)
+        for model in ["svm_l1", "lr_l1", "lr_elasticnet"]:
+            name = f"classical+{model}"
+            print(f"  running {name} ...", file=sys.stderr)
+            cells.append(_run_cell(name, "classical", model, X_cl, y, splits))
 
     # Per-fold CSV
     per_fold_df = pd.DataFrame({"fold": np.arange(len(splits))})

@@ -159,6 +159,34 @@ The original Stage 5 comparison contrasted density-matrix features under linear 
 
 See [`results/stage5_fair_comparison.json`](results/stage5_fair_comparison.json) for the full numerical artifact, [`stages/stage5_fair_comparison.py`](stages/stage5_fair_comparison.py) for the rerun script, and `results/stage5_per_subject.csv` for per-subject LOSO probabilities.
 
+#### Sensitivity analysis: does L1 regularisation lift Classical+SVM out of below chance?
+
+The classical+svm_linear cell's LOSO AUC = 0.32 is consistent with L2-SVC overfitting on 10 ANOVA-selected features at N=28. To test whether the matched-SVM DM-vs-Classical DeLong gap (p=0.001) is robust to regularisation choice, the same Stage 5 script now accepts `--include-l1-sensitivity`. With that flag, three additional cells are added on the classical feature set under the same SelectKBest(k=10) + StandardScaler pre-filter:
+
+- `classical+svm_l1` — LinearSVC with L1 penalty, calibrated for predict_proba via 3-fold sigmoid
+- `classical+lr_l1` — Logistic regression with L1 penalty (liblinear solver)
+- `classical+lr_elasticnet` — Logistic regression with elasticnet (l1_ratio=0.5, saga solver)
+
+Run:
+
+```bash
+python -m stages.stage5_fair_comparison \
+    --results-dir results \
+    --out-json results/stage5_fair_comparison.json \
+    --include-l1-sensitivity
+```
+
+Expected outcomes (to be filled in after the rerun lands):
+
+| Cell | LOSO AUC [95% CI] | DeLong p vs DM+svm_linear | Reading |
+|---|---|---|---|
+| classical+svm_linear (baseline, below chance) | 0.320 [0.111, 0.544] | 0.001 ✓ | overfitting artifact |
+| classical+svm_l1 | TBD | TBD | does L1 prune classical's noise? |
+| classical+lr_l1 | TBD | TBD | parallel test under LR family |
+| classical+lr_elasticnet | TBD | TBD | hybrid regularisation |
+
+If L1 lifts classical above chance, the matched-SVM DM-advantage narrative weakens. If L1 stays below chance, the DM advantage is robust to regularisation choice and the original DeLong p=0.001 reads as a real feature-representation gap.
+
 ### Biomarker Candidates (SHAP Feature Importance — exploratory, conditional on the underlying classifier)
 
 The SHAP rankings below come from the 7-model × 4-feature-set sweep above. Read them as **candidate features for re-evaluation at the target N**, not as established biomarkers — the underlying classifier they explain is not significantly above chance at N = 28.
