@@ -89,3 +89,18 @@ ml:
     - roc_auc
     - sensitivity
     - specificity
+
+# Stage 5 fair-comparison hyperparameters (matched 2x2: feature set x model class).
+# Defaults below are the canonical research-grade settings used for the headline
+# results in README. CI / smoke-test workflows can override via CI_FAST=1 env var
+# (which reduces n_perm to 10 and n_boot to 200, bringing Stage 5 from ~1+ hour
+# to ~2 min on the synthetic fixture). Real-data runs should never set CI_FAST.
+stage5:
+  n_select: 10       # SelectKBest k for the matched preprocessing pipeline
+  n_splits: 10       # RepeatedStratifiedKFold splits
+  n_repeats: 10      # RepeatedStratifiedKFold repeats -> 100 folds total
+  random_state: 42
+  n_boot: 10000      # subject-bootstrap resamples for CIs
+  n_perm: 1000       # label-permutation count for per-cell p-values
+  ci_fast_n_boot: 200    # CI_FAST=1 override for n_boot
+  ci_fast_n_perm: 10     # CI_FAST=1 override for n_perm

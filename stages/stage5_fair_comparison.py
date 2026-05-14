@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -360,6 +361,47 @@ def _run_cell(name: str, feature_set: str, model_class: str, X: np.ndarray,
     )
 
 
+def _resolve_stage5_params(config_path, cli_n_perm):
+    """Resolve Stage 5 hyperparameters with priority:
+       CLI --n-perm > CI_FAST env var > config.yaml stage5: section > module defaults.
+
+    Returns dict with keys: n_splits, n_repeats, seed, n_perm.
+    n_select and n_boot are not externalised here — they remain at module
+    defaults (N_SELECT, N_BOOT) for now (lower priority + harder to thread
+    through the existing call graph).
+    """
+    params = dict(
+        n_splits=N_SPLITS, n_repeats=N_REPEATS, seed=SEED, n_perm=N_PERM,
+    )
+    stage5_cfg = {}
+    if config_path is not None and Path(config_path).exists():
+        try:
+            import yaml
+        except ImportError:
+            print("  [WARN] pyyaml not installed; ignoring --config",
+                  file=sys.stderr)
+        else:
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            stage5_cfg = cfg.get("stage5", {}) or {}
+            for k in ("n_splits", "n_repeats", "n_perm"):
+                if k in stage5_cfg:
+                    params[k] = int(stage5_cfg[k])
+            if "random_state" in stage5_cfg:
+                params["seed"] = int(stage5_cfg["random_state"])
+    if os.environ.get("CI_FAST") == "1":
+        params["n_perm"] = int(stage5_cfg.get("ci_fast_n_perm", 10))
+        # We also signal to the bootstrap path via N_BOOT module override
+        # below in main() — n_boot is still resolved as the global since it's
+        # threaded as a default arg, not a parameter.
+        print("  [CI_FAST=1] overriding n_perm to "
+              f"{params['n_perm']}; n_boot will use ci_fast_n_boot",
+              file=sys.stderr)
+    if cli_n_perm is not None:
+        params["n_perm"] = int(cli_n_perm)
+    return params, stage5_cfg
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
@@ -368,7 +410,16 @@ def main() -> int:
     parser.add_argument("--portfolio-json", type=Path, default=None,
                         help="Optional: also write the JSON to a portfolio "
                              "asset path so the portfolio + repo stay in sync.")
-    parser.add_argument("--n-perm", type=int, default=N_PERM)
+    parser.add_argument("--config", type=Path,
+                        default=Path("configs/config.yaml"),
+                        help=("Path to YAML config; reads the stage5: section "
+                              "for n_splits, n_repeats, n_perm, random_state. "
+                              "Falls back silently to module defaults if "
+                              "missing or pyyaml is not installed."))
+    parser.add_argument("--n-perm", type=int, default=None,
+                        help=("Override n_perm from CLI (highest priority). "
+                              "Default: read from config.stage5.n_perm or "
+                              f"fall back to {N_PERM}."))
     parser.add_argument("--include-l1-sensitivity", action="store_true",
                         help=("Append 3 L1-regularised sensitivity cells on the "
                               "classical feature set (svm_l1, lr_l1, lr_elasticnet). "
@@ -378,17 +429,29 @@ def main() -> int:
                               "0.32 at N=28."))
     args = parser.parse_args()
 
+    params, stage5_cfg = _resolve_stage5_params(args.config, args.n_perm)
+    # CI_FAST also overrides the n_boot default (used by bootstrap helpers
+    # via their default-arg N_BOOT). Mutate the module-level constant before
+    # any bootstrap call below.
+    global N_BOOT
+    if os.environ.get("CI_FAST") == "1":
+        N_BOOT = int(stage5_cfg.get("ci_fast_n_boot", 200))
+
     results_dir = args.results_dir.resolve()
     X_dm, X_cl, y, subject_order = _load_data(results_dir)
     print(f"N subjects: {len(y)}  DM features: {X_dm.shape[1]}  "
           f"classical features: {X_cl.shape[1]}", file=sys.stderr)
     print(f"class balance: {np.bincount(y).tolist()}", file=sys.stderr)
+    print(f"stage5 hyperparams: n_splits={params['n_splits']} "
+          f"n_repeats={params['n_repeats']} n_perm={params['n_perm']} "
+          f"n_boot={N_BOOT} seed={params['seed']}", file=sys.stderr)
 
-    cv = RepeatedStratifiedKFold(n_splits=N_SPLITS, n_repeats=N_REPEATS,
-                                 random_state=SEED)
+    cv = RepeatedStratifiedKFold(n_splits=params["n_splits"],
+                                 n_repeats=params["n_repeats"],
+                                 random_state=params["seed"])
     splits = list(cv.split(np.zeros(len(y)), y))
-    print(f"matched CV: {N_SPLITS}-fold x {N_REPEATS} repeats = "
-          f"{len(splits)} folds", file=sys.stderr)
+    print(f"matched CV: {params['n_splits']}-fold x {params['n_repeats']} "
+          f"repeats = {len(splits)} folds", file=sys.stderr)
 
     cells = []
     for fset_name, X in [("density_matrix", X_dm), ("classical", X_cl)]:
@@ -470,7 +533,7 @@ def main() -> int:
         factory = _model_factory(c.model_class)
         X = X_dm if c.feature_set == "density_matrix" else X_cl
         obs, p_perm = _permutation_bacc(X, y, factory, splits,
-                                        n_perm=args.n_perm)
+                                        n_perm=params["n_perm"])
         perm.append({"cell": c.name, "per_fold_bacc_obs": obs,
                      "permutation_p": p_perm})
 
@@ -517,9 +580,19 @@ def main() -> int:
         "n_subjects": int(len(y)),
         "n_folds_total": int(len(splits)),
         "cv_design": (f"matched RepeatedStratifiedKFold "
-                      f"({N_SPLITS}-fold x {N_REPEATS} repeats); "
+                      f"({params['n_splits']}-fold x {params['n_repeats']} "
+                      "repeats); "
                       "LOSO per-subject probabilities used for unbiased AUC + "
-                      "DeLong; subject-bootstrap CIs (N_BOOT=10000)."),
+                      f"DeLong; subject-bootstrap CIs (N_BOOT={N_BOOT})."),
+        "hyperparams": {
+            "n_select": N_SELECT,
+            "n_splits": params["n_splits"],
+            "n_repeats": params["n_repeats"],
+            "seed": params["seed"],
+            "n_boot": N_BOOT,
+            "n_perm": params["n_perm"],
+            "ci_fast_mode": os.environ.get("CI_FAST") == "1",
+        },
         "cells": cell_summary,
         "pairwise_delong": pairwise,
         "permutation_tests": perm,

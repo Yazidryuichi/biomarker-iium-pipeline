@@ -297,6 +297,25 @@ make bids      # convert to BIDS format
 
 Data are not included in this repository (participant privacy). See the data setup section in the codebase for file placement instructions.
 
+### Stage execution order vs stage numbering
+
+The stage numbers are stable identifiers, **not strictly the execution order**. In a full `python run_all.py` run, the orchestrator executes stages 1 → 2 → 3 → 4 → 6 → 5 (because Stage 5's fair comparison consumes Stage 6's density-matrix feature outputs). Reading the code, the numbers reflect the logical stage of analysis; the runtime DAG resolves the data dependency at execution time. See [`run_all.py`](run_all.py) lines 15-18 for the full DAG note.
+
+### Environment variables
+
+The orchestrator and individual stages respect these environment variables for skipping or accelerating expensive sub-steps. Real-data research runs should leave them all unset.
+
+| Env var | What it does | When to use |
+|---|---|---|
+| `SKIP_SHAP=1` | Skip SHAP tree explainer in Stage 4C (can hang ≥40 min on synthetic fixtures with shap≥0.49.1) | CI smoke tests; not for real-data runs |
+| `SKIP_STAGE5=1` | Skip the Stage 5 fair-comparison subprocess entirely. Stage 5 is post-hoc statistical inference (100-fold × 1000-perm × 10000-bootstrap ≈ 1+ hour at N=20-28), not part of pipeline correctness | CI smoke tests when `CI_FAST` isn't viable; not for real-data runs |
+| `CI_FAST=1` | Read `stage5.ci_fast_n_perm` and `stage5.ci_fast_n_boot` overrides from `configs/config.yaml` (defaults: n_perm=10, n_boot=200). Lets Stage 5 actually run in CI in ~2 min instead of being skipped wholesale | CI integration tests where you want Stage 5 *correctness* validated but not statistical power |
+| `RUN_CNN_LSTM=1` | Enable CNN-LSTM in Stage 4's classifier sweep. **Disabled by default because PyTorch + joblib's `fork` start method hang on macOS** (see Stage 4 status note). Linux runs are reportedly stable | Linux-only; you want the deep-learning baseline included |
+
+### Stage 5 hyperparameters via config
+
+Stage 5's CV and inference knobs are externalised in [`configs/config.yaml`](configs/config.yaml) under the `stage5:` section: `n_select`, `n_splits`, `n_repeats`, `n_boot`, `n_perm`, `random_state`. Override via the YAML file, or pass `--config /path/to/config.yaml` to `stages/stage5_fair_comparison.py`, or override `n_perm` at the CLI with `--n-perm`. Priority: CLI > `CI_FAST` env > config file > module defaults.
+
 ## References
 
 - Arns, M., Conners, C.K., & Kraemer, H.C. (2013). A decade of EEG theta/beta ratio research in ADHD: A meta-analysis. *Journal of Attention Disorders*, 17(5), 374-383.
