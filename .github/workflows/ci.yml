@@ -53,7 +53,29 @@ jobs:
           python -m pip install pytest
 
       - name: Run unit tests
-        run: python -m pytest tests/test_density_matrix.py -v
+        # P2.1d: Stage 5 unit tests added (tests/test_stage5_fair_comparison.py).
+        # P2.3: CNN-LSTM smoke test (Linux-only skip on macOS/Windows).
+        run: python -m pytest tests/test_density_matrix.py tests/test_stage5_fair_comparison.py tests/test_cnn_lstm.py -v
+
+  docker-build:
+    name: Docker image builds cleanly
+    runs-on: ubuntu-latest
+    # Independent of test-unit — fast (~5 min); if Dockerfile breaks, supervisors
+    # trying `make docker` would hit it. Build only; don't push.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: biomarker-iium:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   test-end-to-end:
     name: End-to-end pipeline against synthetic fixture
