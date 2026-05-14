@@ -65,13 +65,17 @@ jobs:
         # crashed Stage 6 → Stage 5 with "n_splits=10 cannot be greater
         # than the number of members in each class".
         #
-        # --duration 20 — N=20 with default 30 s timed out at 1h21m;
-        # N=20 with 10 s broke Stage 1 (autoreject CV needs ≥5 surviving
-        # epochs; at 10 s only 4 survive, and bad-channel detection over-
-        # rejects making picks=13 < ica.n_components=14). 20 s yields 10
-        # non-overlapping 2-s epochs → ≥5 survive autoreject and channel
-        # correlations are stable enough to keep ICA happy. Reduces Stage 6
-        # density-matrix compute ~1.5–2× vs 30 s. Real-data runs use 30+ s.
+        # --duration 24 — bumped from 20 after P1.1 cleaning.min_epochs
+        # floor (default 10) was breaking Stage 1: at 20 s, mne.make_fixed_
+        # length_events produces 9 non-overlapping 2-s epochs (not 10 — the
+        # boundary epoch [18, 20] is excluded), so every recording landed
+        # below the floor and Stage 1 produced 0 OK recordings, cascading
+        # to KeyError: 'subject_id' in Stage 3. 24 s yields 11-12 epochs,
+        # comfortably above the 10-floor even with 1-2 epoch rejections.
+        # Earlier history: --duration 10 broke Stage 1 (autoreject CV needs
+        # ≥5 surviving epochs, only 4 survived; bad-channel detection over-
+        # rejected making picks=13 < ica.n_components=14). 20 s was viable
+        # before the min_epochs floor. Real-data runs use 30+ s.
         #
         # CI is a smoke test ("does the pipeline run without crashing"),
         # not a statistical run; N=20 × 20 s is still well above the
@@ -80,7 +84,7 @@ jobs:
           python tests/generate_synthetic_fixture.py \
             --out tests/fixtures/synthetic \
             --n-subjects 20 \
-            --duration 20 \
+            --duration 24 \
             --seed 42
 
       - name: Run pipeline end-to-end on fixture
