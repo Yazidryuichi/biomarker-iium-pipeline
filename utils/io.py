@@ -315,7 +315,20 @@ def _ez_diffusion(mrt_s, vrt_s2, pc, s=0.1):
 
 
 def load_flanker(filepath):
-    """Load Flanker Test pilot data and compute EZ-diffusion model parameters."""
+    """
+    Load Flanker Test pilot data.
+
+    Prefers pre-computed DDM columns from the source file when present
+    (``ddm_v_incongruent``, ``ddm_v_congruent``, ``ddm_a_*``, ``ddm_t0_*``,
+    ``ddm_delta_v``). Falls back to EZ-DDM (Wagenmakers et al., 2007)
+    only for any column that is missing.
+
+    Why prefer pre-computed: EZ-DDM is undefined at p_correct in {0, 1},
+    so re-deriving on the fly drops at-ceiling subjects (a large fraction
+    of this paediatric cohort scored 1.0 accuracy). The pre-computed
+    columns in the workbook were estimated with a more robust procedure
+    that handles ceiling cases.
+    """
     df = pd.read_excel(filepath)
 
     rt_cols = ["rt_mean", "rt_congruent", "rt_incongruent"]
@@ -323,17 +336,22 @@ def load_flanker(filepath):
         if col in df.columns and df[col].abs().max() > 1000:
             df[col] = df[col] / 1000.0  # convert ms → seconds
 
-    # EZ-DDM on overall task
+    # Overall EZ-DDM (legacy ddm_v / ddm_a / ddm_t naming): only fill if missing.
     if {"rt_mean", "rt_cv", "acc_overall"}.issubset(df.columns):
         rt_sd = df["rt_cv"] * df["rt_mean"]
-        rows = zip(df["rt_mean"], rt_sd**2, df["acc_overall"])
-        params = [_ez_diffusion(mrt, vrt, pc) for mrt, vrt, pc in rows]
-        df["ddm_v"] = [p[0] for p in params]
-        df["ddm_a"] = [p[1] for p in params]
-        df["ddm_t"] = [p[2] for p in params]
+        rows = list(zip(df["rt_mean"], rt_sd**2, df["acc_overall"]))
+        if "ddm_v" not in df.columns:
+            df["ddm_v"] = [_ez_diffusion(mrt, vrt, pc)[0] for mrt, vrt, pc in rows]
+        if "ddm_a" not in df.columns:
+            df["ddm_a"] = [_ez_diffusion(mrt, vrt, pc)[1] for mrt, vrt, pc in rows]
+        if "ddm_t" not in df.columns:
+            # Spreadsheet uses ddm_t0_* naming — accept that as a synonym.
+            if "ddm_t0_overall" in df.columns:
+                df["ddm_t"] = df["ddm_t0_overall"]
+            else:
+                df["ddm_t"] = [_ez_diffusion(mrt, vrt, pc)[2] for mrt, vrt, pc in rows]
 
-    # delta_v (congruent − incongruent drift rate): inhibitory control index
-    # Use pre-computed column if present, otherwise derive from per-condition RT
+    # delta_v: prefer pre-computed; otherwise derive from per-condition RT.
     if "ddm_delta_v" not in df.columns:
         if {"rt_congruent", "rt_incongruent", "rt_cv", "acc_overall"}.issubset(df.columns):
             rt_sd = df["rt_cv"] * df["rt_mean"]

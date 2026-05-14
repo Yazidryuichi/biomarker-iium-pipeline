@@ -131,71 +131,103 @@ C_band = (1/N) * sum(cov(X_filtered_epoch))
 
 Upper triangle vectorized for ML input. Full matrices saved for Riemannian classifiers.
 
-## 3. Classification (Stage 4)
+## 3. Analysis (Stage 4)
 
-### 3.1 Target Variable
+### 3.0 Target Variable Preparation
 
-Continuous Global EF score (mean of AUFEI Working Memory + Inhibitory Control domains) binarized via **fold-internal median split**:
+The primary target is treated as a **continuous regression problem** with a **post-hoc clinical screening threshold**, not as a binary classification problem from the outset. Two preprocessing steps are applied to the raw target before modelling:
+
+**(1) Age residualization.** Executive function develops sharply between ages 6 and 12 (Diamond, 2013). A given raw EF score therefore means very different things in a 7-year-old versus a 12-year-old. We model the typical age trajectory with ordinary least squares and analyse the residual ("performance relative to peers of the same age"):
 
 ```
-For each CV fold:
-    threshold = median(Global_EF[train_indices])
-    y_train = (Global_EF[train] > threshold).astype(int)
-    y_test = (Global_EF[test] > threshold).astype(int)
+y_residual = y - LinearRegression(age_months).predict(age_months)
 ```
 
-This prevents target leakage: the binarization threshold is never computed using test data.
+The model R² on the raw target is reported in `target_preparation_report.json:age_model_r2`. Default covariate is `age_months` (auto-derived from `age_years` if absent in `full_dataset.csv`); additional covariates may be added via `analysis.target.primary.residualize_covariates` in `stages/analysis/config.yaml`.
+
+The age model is fit **once on the full cohort**. Because it uses no biomarker features and no fold-specific labels, refitting it inside the CV loop is unnecessary and would only inject noise; the residualization step is best understood as a target transform (analogous to log-transforming a skewed outcome) rather than a learned model.
+
+**(2) Two-stage approach: regression development → post-hoc threshold.** All learning and validation is performed on the continuous residualized target. After cross-validation, a fixed quantile of the residualized distribution is used as a clinical "at-risk" cut-off, and screening metrics (sensitivity, specificity, AUC, PPV, NPV) are computed from the cross-validated continuous predictions:
+
+```
+threshold = quantile(y_residual, q=1/3)   # default tertile_bottom
+y_binary  = (y_residual <= threshold).astype(int)        # 1 = at-risk
+y_pred_bin = (y_pred_oof <= threshold).astype(int)
+```
+
+The same threshold (computed once from the residualized distribution) is applied to both true and predicted continuous values, so the binary metrics inherit the regression model's calibration without retraining a separate classifier. Sensitivity analysis additionally reports metrics under `quartile_bottom` (q=0.25) and `median` (q=0.5) thresholds in `clinical_screening_metrics.csv`.
+
+**Tertile rationale.** A bottom-tertile cut-off is the standard developmental-screening convention for "at-risk" identification: it flags the lowest ~33% of children, which matches the typical referral rate in school-based EF screening protocols. A quartile cut-off would be too narrow for a screening (high specificity, low sensitivity); a median cut-off is too liberal (half the cohort is "at-risk"). Reporting all three lets the reader pick the operating point that matches their clinical use case.
+
+### 3.1 Hypothesis Correlations
+
+Pre-specified Spearman correlations (H1-H3 plus secondary tests) are reported with both raw and FDR-corrected p-values. Pearson coefficients are reported as a supplementary check on linearity. Correction is restricted to the pre-specified set, not the full feature×outcome grid (see CLAUDE.md "Methodological invariants"). Correlations run on the raw (unresidualized) measures for backward compatibility with the original hypothesis registration.
 
 ### 3.2 Pipeline Architecture
 
 ```
-SimpleImputer(strategy="median")
-    -> StandardScaler()
-    -> SelectKBest(f_classif, k=adaptive)
-    -> Classifier
+[unsupervised pre-CV]
+    drop_low_variance(threshold=1e-6)
+        -> drop_collinear_hierarchical(corr_threshold=0.95)
+[per CV fold]
+    SimpleImputer(strategy="median")
+        -> StandardScaler()
+        -> [optional univariate filter, disabled by default]
+        -> Regressor
 ```
 
-Feature selection k is adaptive: `k = max(5, min(15, n_features // 10))`.
+Note: **unsupervised steps (variance and collinearity drops) are applied once on the full feature matrix; no target leakage** because neither step consults `y`. Fitting them once before CV is therefore equivalent to refitting per fold but much cheaper, and saves the diagnostic record in a single JSON. Collinearity clustering uses scipy hierarchical clustering on `1 - |corr|` distance with average linkage; the cut at `t = 1 - 0.95 = 0.05` collapses any feature pair with |corr| ≥ 0.95 into one cluster, and the cluster's highest-variance member is retained. The full cluster_map (kept feature → list of dropped followers) is written to `feature_curation_report.json`.
+
+The optional univariate filter (mutual-information regression by default) is disabled because L1 regularisation in `LassoCV`/`ElasticNetCV` already performs supervised feature selection; enabling it for tree-only lineups is a one-line config change.
 
 ### 3.3 Models
 
-The full set of models implemented in `_build_models()` is listed below; the **active lineup is selected via `stages/analysis/config.yaml: models[]`**, and feature sets via `feature_sets[]`. The current paper-ready default is RandomForest + SVM only — chosen because at N = 26 a tighter lineup is more honestly interpretable than an eight-model sweep. Boosted trees (XGBoost, CatBoost) and others remain available behind a single config edit.
+The default lineup is regression-first, listed below. The **active set is selected via `stages/analysis/config.yaml: models[]`**, and feature sets via `feature_sets[]`. At N = 26 the tighter lineup (Lasso + ElasticNet + RandomForest) is more honestly interpretable than a wide sweep.
 
-| Model | Key Parameters | Class Weighting |
-|-------|---------------|-----------------|
-| RandomForest | n_estimators=100, max_depth=3 | balanced |
-| SVM (RBF) | C=1.0 | balanced |
-| XGBoost | n_estimators=50, max_depth=3, lr=0.1 | via scale_pos_weight |
-| LightGBM | n_estimators=100, max_depth=3, lr=0.1 | via is_unbalance |
-| CatBoost | iterations=100, depth=3, lr=0.1 | auto |
-| KNN | k=5 | N/A |
-| MLP | (64, 32), early_stopping | N/A |
-| CNN-LSTM | Conv1D(16) -> LSTM(32) -> FC(1) | BCEWithLogitsLoss |
-| QSVM_4q_ZZ / 6q_ZZ / 6q_prod | pennylane kernel-SVM | N/A — opt-in |
+| Model                   | Key Parameters                                         | Selection                |
+|-------------------------|--------------------------------------------------------|--------------------------|
+| LassoCV                 | cv=5, n_alphas=50, max_iter=5000                       | L1 (built-in)            |
+| ElasticNetCV            | cv=5, l1_ratio in {0.1, 0.5, 0.7, 0.9, 0.95, 1.0}      | L1+L2 (built-in)         |
+| RandomForestRegressor   | n_estimators=300, max_depth=4, min_samples_leaf=2      | tree-based feature usage |
+| SVR (RBF)               | C=1.0, gamma="scale"                                   | external (univariate)    |
+| GradientBoostingRegressor | n_estimators=200, max_depth=3, lr=0.05               | tree-based feature usage |
+
+**Legacy classifiers** (RandomForest, SVM, KNN, MLP, XGBoost, LightGBM, CatBoost, CNN-LSTM, QSVM_4q_ZZ / 6q_ZZ / 6q_prod) remain available behind `analysis.legacy_classification.enable: true`. When enabled, the pre-refactor median-split + classifier flow runs alongside the regression flow on the same target and writes `legacy_ml_results.csv`. This is intended only as a backwards-compat sensitivity comparison; the regression pipeline is the primary analysis.
 
 ### 3.4 Cross-Validation
 
-**Main evaluation:** RepeatedStratifiedKFold (`cv_folds=5`, `cv_repeats=5` = 25 evaluations per model in the current configuration). Fold-internal median split of the continuous target prevents threshold leakage.
+**CV-only protocol — no train/test holdout.** All performance estimates and hyperparameter selection are obtained via cross-validation on the full cohort. We do **not** carve out a separate test set. At N = 26 a holdout split would either (a) be too small to give a stable estimate (k-shot test sets at N ≤ 6 have ROC-AUC standard errors of 0.15–0.25, larger than any plausible effect; Varoquaux 2018) or (b) shrink the training set to the point where every fold becomes a different model. Vabalas et al. (2019) further show that at N < 100 a single-split holdout produces **systematically biased and high-variance** accuracy estimates, while repeated k-fold CV is unbiased and tighter. Reporting a held-out test number at this N would create the appearance of independent validation without the statistical reality.
 
-**Hyperparameter tuning:** Nested CV with RandomizedSearchCV on the best-scoring feature set only (inner: 3 folds, outer: 5 x 5; `n_iter=20`; `n_jobs=1` to avoid joblib OOM under macOS).
+**Main evaluation:** `RepeatedKFold(n_splits=5, n_repeats=5, random_state=42)` = 25 evaluations per (feature_set, model). Stratification is not applicable to regression. Out-of-fold predictions for clinical screening are produced by a single `KFold(n_splits=5)` pass via `cross_val_predict` so that every subject has exactly one held-out prediction. Reporting follows the **single-CV-pass** convention recommended by Varoquaux (2018) — fold-level Pearson r values and their across-fold standard deviation are the headline summary, with bootstrap CIs for inference, rather than collapsing to a single point estimate.
+
+**Hyperparameter selection.** Performed by the regularisation-path search built into `LassoCV` and `ElasticNetCV` (internal 5-fold over a 50-point alpha grid; for ElasticNet, additionally over `l1_ratio in {0.1, 0.5, 0.7, 0.9, 0.95, 1.0}`). For RandomForestRegressor we use **fixed conservative hyperparameters** (`n_estimators=100, max_depth=3, min_samples_leaf=3`) chosen *a priori* for the N=26 regime; no grid search or RandomizedSearchCV. Vabalas et al. (2019, §4.2) show that nested-CV hyperparameter search at small N can paradoxically inflate estimated performance because the search adapts to fold-specific noise, and recommend either fixed defaults or strictly `n_iter=1` hyperparameter search. We chose the fixed-defaults route to keep the pipeline auditable.
+
+**No nested RandomizedSearchCV in the regression path.** The legacy classification flow (Section 3.3 footnote, only active behind `legacy_classification.enable: true`) retains a nested-CV tuning loop for backwards comparison; the primary regression analysis does not.
+
+`n_jobs=1` everywhere — joblib parallelism has caused OOM at this feature count on macOS in prior runs.
 
 ### 3.5 Statistical Validation
 
-**Permutation test:** 200 permutations of label shuffling on the best-scoring (feature_set, model) pair to establish a null distribution. Reported p-value tests H0: "model accuracy = chance."
+**Permutation test (regression).** 200 random shuffles of the target on the best-scoring (feature_set, model) pair by mean Pearson r. The p-value tests H0: "the model's Pearson r is consistent with the null distribution of permuted-y r values." Implementation runs `cross_val_predict` once per permutation; results stored in `permutation_results.json`.
 
-**Bootstrap CI:** 1000 bootstrap resamples of CV balanced accuracy scores. 95% CI reported via percentile method.
+**Bootstrap CI.** 1000 bootstrap resamples (with replacement) of the OOF (y_true, y_pred) pair, computing both Pearson r and screening AUC at each resample. 95% percentile CIs are reported per (feature_set, model) and per threshold method in `bootstrap_ci.json`.
 
-**FDR correction:** Benjamini-Hochberg applied across the 8 pre-specified hypothesis tests.
+**Clinical screening metrics derived from regression predictions.** Sensitivity, specificity, balanced accuracy, F1, PPV, and NPV are computed by applying the pre-computed clinical threshold to OOF predictions. AUC uses the *continuous* OOF predictions directly (signed so that "lower predicted residual" → higher at-risk score), so it is threshold-free and robust to mis-specifying the operating point. No separate classifier is trained.
+
+**FDR correction.** Benjamini-Hochberg (`fdr_bh`) is applied (a) across the pre-specified hypothesis correlations (Section 3.1) and (b) across one-sided t-tests of fold-level Pearson r > 0 across all evaluated (feature_set, model) cells; the latter is reported in `regression_summary.csv` as a coarse screen for which combinations exceed null performance after multiplicity correction.
 
 ### 3.6 Metrics
 
-- **Primary:** Balanced accuracy (accounts for class imbalance)
-- **Secondary:** Sensitivity, specificity, F1-score, AUC-ROC
-- **Effect sizes:** Cohen's d via r-to-d conversion: `d = 2r / sqrt(1 - r^2)`
+- **Primary (regression):** Pearson r between OOF prediction and true residual (per fold, mean across folds).
+- **Secondary (regression):** Spearman rho, R², MAE.
+- **Clinical screening (post-hoc):** Sensitivity, specificity, balanced accuracy, F1, PPV, NPV at the pre-specified threshold; AUC from continuous OOF predictions.
+- **Effect sizes:** For correlation hypotheses, Cohen's d via r-to-d conversion: `d = 2r / sqrt(1 - r^2)`.
 
 ### 3.7 SHAP Analysis
 
-SHAP values computed per CV fold and averaged:
+SHAP values are computed for the best regressor on the curated feature matrix. `TreeExplainer` is used for tree-based models (RandomForest, GradientBoosting), `LinearExplainer` for L1/L2-regularised regressors (LassoCV, ElasticNetCV), and `KernelExplainer` (background = 50 samples) as the fallback for SVR. The mean absolute SHAP value per feature is reported in `shap_importance.csv`, biological annotations (when available) in `shap_annotated.csv`, and the standard SHAP summary plot in `figures/shap_summary.png`.
+
+For the legacy classification path (when enabled), the original per-CV-fold SHAP averaging is retained:
 
 ```
 For each fold k in 5-fold CV:
@@ -265,4 +297,7 @@ Pre-specified, derived from literature review:
 - Jas, M., et al. (2017). Autoreject: Automated artifact rejection for MEG and EEG data. *NeuroImage*, 159, 417-429.
 - Lundberg, S.M. & Lee, S.I. (2017). A unified approach to interpreting model predictions. *NeurIPS*.
 - Miyake, A., et al. (2000). The unity and diversity of executive functions. *Cognitive Psychology*, 41(1), 49-100.
+- Vabalas, A., Gowen, E., Poliakoff, E., & Casson, A.J. (2019). Machine learning algorithm validation with a limited sample size. *PLOS ONE*, 14(11), e0224365. https://doi.org/10.1371/journal.pone.0224365
+- Varoquaux, G. (2018). Cross-validation failure: Small sample sizes lead to large error bars. *NeuroImage*, 180(Pt A), 68-77. https://doi.org/10.1016/j.neuroimage.2017.06.061
+- Wagenmakers, E.-J., van der Maas, H.L.J., & Grasman, R.P.P.P. (2007). An EZ-diffusion model for response time and accuracy. *Psychonomic Bulletin & Review*, 14(1), 3-22.
 - Zhang, D.W., et al. (2017). Theta/beta ratio and EEG in ADHD. *Clinical Neurophysiology*, 128(8), 1436-1443.

@@ -1,7 +1,16 @@
-# Stage 4: Analysis (descriptives, correlations, classification, SHAP)
+# Stage 4: Analysis (regression-first, post-hoc clinical thresholding)
 # =====================================================================
 # input.from: engineering   → reads latest stages/engineering/runs/<ts>/full_dataset.csv
 # output.to:  analysis      → writes to stages/analysis/runs/<YYYY-MM-DD_HHMMSS>/
+#
+# This stage is REGRESSION-FIRST. The continuous target (default:
+# DDM incongruent drift rate, age-residualized) is modelled directly;
+# binary at-risk labels are derived post-hoc by cutting the
+# residualized target at a fixed quantile and used only to compute
+# clinical-screening metrics from cross_val_predict outputs.
+#
+# Set legacy_classification.enable: true to also run the old
+# binary-classification path (backwards-compat sensitivity analysis).
 
 input:
   from: engineering
@@ -10,91 +19,98 @@ output:
   to: analysis
 
 params:
-  cv_folds: 5
-  cv_repeats: 5
-  test_size: 0.2
-  # Quantum-kernel SVM models (QSVM_4q_ZZ, QSVM_6q_ZZ, QSVM_6q_prod).
-  # Requires `pip install pennylane`. Slow per-fold; only useful when
-  # quantum features are enabled at extraction (stages/features/config.yaml).
-  include_qsvm: false
+  # ----- Unsupervised feature curation (runs once on full cohort) -----
+  # Unsupervised steps cannot leak labels, so they are safe to apply
+  # before the CV split. Drops near-constant columns then collapses
+  # tightly correlated clusters to a single representative.
+  feature_curation:
+    enable: true
+    variance_threshold: 1.0e-6
+    collinearity_threshold: 0.95
+    save_diagnostics: true
 
-  # --- Targets (continuous score; median split done inside CV fold) ---
-  # Multi-target supported: list any number. Output layout becomes
-  # analysis/<ts>/<target>/ml_results.csv when len(targets) > 1.
+  # ----- Target variables -----
+  # Each name must be a continuous column in full_dataset.csv produced
+  # by stage engineering. Outputs per target land in
+  #   stages/analysis/runs/<ts>/<target>/   (when len(names) > 1)
+  #   stages/analysis/runs/<ts>/             (when len(names) == 1)
   #
-  # Available columns produced by stage engineering:
+  # task: 'regression' is the default; 'classification' falls back to
+  # the legacy median-split + classifier path.
   #
-  #   AUFEI-O questionnaire (parent-rated executive function):
-  #   Global_EF       — mean of all AUFEI-O subscales (primary outcome)
-  #   WM_score        — Working Memory subscale mean
-  #   IC_score        — Inhibitory Control subscale mean
-  #   CF_score        — Cognitive Flexibility subscale mean
-  #   P_score         — Planning subscale mean
-  #   SF_score        — Shifting subscale mean
-  #
-  #   Flanker task (computerised inhibitory control):
-  #   flanker_effect  — congruent RT minus incongruent RT (ms); larger = worse IC
-  #   flanker_acc     — overall accuracy (proportion correct)
-  #   ddm_v           — EZ-DDM drift rate (higher = faster evidence accumulation)
-  #   ddm_a           — EZ-DDM boundary separation (higher = more cautious)
-  #   ddm_t           — EZ-DDM non-decision time (seconds)
-  #   ddm_delta_v     — drift rate difference: congruent minus incongruent
-  #
-  #   Digit Span (working memory capacity):
-  #   FW_Span         — forward digit span score
-  #   BW_Span         — backward digit span score
-  targets:
-    - Global_EF
-    # - WM_score
-    # - IC_score
-    # - CF_score
-    # - P_score
-    # - SF_score
-    # - flanker_effect
-    # - flanker_acc
-    # - ddm_v
-    # - ddm_a
-    # - ddm_t
-    # - ddm_delta_v
-    # - FW_Span
-    # - BW_Span
+  # residualize_covariates: regressed out of every target before CV.
+  # Default 'age_months' is materialised by stage engineering from DoB.
+  target:
+    task: regression
+    residualize_covariates: [age_months]
+    clinical_threshold:
+      method: tertile_bottom            # 33rd percentile (lower residual = at-risk)
+      sensitivity_methods: [median, quartile_bottom]
+    names:
+      - Global_EF
+      - IC_score
+      - WM_score
+      - BW_Span
+      - ddm_v_incongruent
+      - ddm_delta_v
 
-  # --- Models (comment out any line to disable that model) ---
-  # CNN-LSTM requires PyTorch and runs in a separate loop regardless of
-  # position in this list (sklearn joblib + macOS hangs).
-  # Slimmed lineup for N=26: dropped LightGBM (degenerated to 0.5 across all
-  # feature sets in prior runs — its leaf-wise growth needs more samples than
-  # we have), KNN/MLP (unstable on tiny N), CNN-LSTM (insufficient data).
-  # Re-enable any line if you want a wider sweep.
+  # ----- Models -----
+  # Default lineup is regression. Names map to factories in
+  # stages/analysis/analysis.py:_build_regressors. Comment a line to
+  # disable. Available legacy classifiers are listed in
+  # legacy_classification.models below.
   models:
-    - RandomForest
-    - SVM
-    # - XGBoost     # requires: pip install xgboost
-    # - CatBoost    # requires: pip install catboost
-    # - LightGBM    # requires: pip install lightgbm
-    # - KNN
-    # - MLP
-    # - CNN-LSTM    # requires: pip install torch
+    - LassoCV
+    - ElasticNetCV
+    - RandomForestRegressor
+    # Available, disabled for paper-ready lineup:
+    # - SVR
+    # - GradientBoostingRegressor
 
-  scoring:
-    - balanced_accuracy
-    - f1
-    - roc_auc
-    - sensitivity
-    - specificity
+  # ----- Cross-validation -----
+  # RepeatedKFold (NOT stratified) for regression — there is no class
+  # label to balance across folds. n_splits * n_repeats = total folds.
+  cv:
+    type: RepeatedKFold
+    n_splits: 5
+    n_repeats: 5
+    random_state: 42
 
-  # --- Feature sets to evaluate ---
-  # Comment out a line to skip that feature set. Leave the whole list empty
-  # or remove this key to evaluate every set discovered by analysis.py.
-  #
-  # Available sets (auto-built in stages/analysis/analysis.py:get_feature_sets):
-  #   conventional_qeeg              — PSD + TBR + FAA + coherence (EO+EC)
-  #   conventional_plus_advanced     — + wavelet + Hjorth + entropy + PAC
-  #   covariance_only                — frequency-band covariance matrices
-  #   all_features                   — everything classical
-  #   *_eo / *_ec                    — Eyes-Open / Eyes-Closed only variants
-  #   quantum_only                   — only when stages/features include_quantum=true
-  #   classical_plus_quantum         — classical + quantum (same precondition)
+  # ----- Optional univariate filter -----
+  # Disabled by default because L1 (LassoCV) and ElasticNetCV already
+  # do supervised selection inside the pipeline. Enable for tree-only
+  # lineups if feature count is unwieldy after curation.
+  univariate_filter:
+    enable: false
+    method: mutual_info_regression
+    k_adaptive: true
+
+  # ----- Statistical validation -----
+  validation:
+    permutation_n: 200
+    bootstrap_n: 1000
+    fdr_method: fdr_bh                  # Benjamini-Hochberg
+
+  # ----- Legacy classification path (backwards compatibility) -----
+  # When enabled, the pipeline ALSO runs the pre-refactor
+  # median-split + classifier flow on the same target. Use as a
+  # sanity-check; the regression flow is the primary analysis.
+  legacy_classification:
+    enable: false
+    cv_folds: 5
+    cv_repeats: 5
+    include_qsvm: false
+    models:
+      - RandomForest
+      - SVM
+    feature_sets:
+      - conventional_qeeg
+      - all_features
+
+  # ----- Feature sets (used by both paths) -----
+  # Comment out lines to skip a set. The regression path applies
+  # feature curation first, then runs each enabled feature set
+  # through the regressor lineup.
   feature_sets:
     - conventional_qeeg
     - conventional_qeeg_ec

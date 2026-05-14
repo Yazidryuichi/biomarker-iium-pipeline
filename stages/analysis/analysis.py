@@ -1,9 +1,14 @@
 """
-Stage 4: Statistical Analysis + ML Classification
-====================================================
+Stage 4: Statistical Analysis + ML (Regression-First)
+======================================================
 4A. Descriptive statistics and correlations (H1-H3)
-4B. ML classification with feature set comparison (H4)
-4C. SHAP analysis for biomarker identification (H5)
+4B. Pre-modeling preprocessing (unsupervised feature curation +
+    age-residualization of the continuous target)
+4C. Regression CV (LassoCV / ElasticNetCV / RandomForestRegressor)
+    and post-hoc clinical screening from cross_val_predict.
+4D. Permutation test + bootstrap CI on the best model.
+4E. Legacy binary-classification path (kept behind config flag).
+4F. SHAP analysis on the best regressor.
 """
 
 import gc
@@ -31,7 +36,6 @@ def run_descriptives(df, config):
     print("4A. Descriptive Statistics")
     print("-" * 40)
 
-    # Demographics
     print(f"\n  N = {len(df)}")
     if "age_years" in df.columns:
         print(f"  Age: {df['age_years'].mean():.1f} +/- {df['age_years'].std():.1f} years")
@@ -39,17 +43,15 @@ def run_descriptives(df, config):
         sex_counts = df["Sex"].value_counts()
         print(f"  Sex: {dict(sex_counts)}")
 
-    # Behavioral measures
     beh_cols = ["Global_EF", "WM_score", "IC_score", "CF_score", "P_score", "SF_score",
                 "flanker_effect", "ddm_v", "ddm_a", "ddm_t", "ddm_delta_v",
-                "FW_Span", "BW_Span", "Total_Span"]
+                "ddm_v_incongruent", "FW_Span", "BW_Span", "Total_Span"]
     beh_cols = [c for c in beh_cols if c in df.columns]
 
     desc = df[beh_cols].describe().round(3)
     print(f"\n  Behavioral measures:")
     print(desc.to_string())
 
-    # Key QEEG features (EO condition)
     tbr_cols = [c for c in df.columns if "tbr_" in c and c.startswith("eo_")]
     if tbr_cols:
         print(f"\n  TBR features:")
@@ -60,17 +62,10 @@ def run_descriptives(df, config):
 
 def run_correlations(df, config):
     """
-    Test hypotheses H1-H3 (pre-specified, not data-driven):
-      H1: negative correlation TBR_frontal vs Global_EF
-      H2: negative correlation theta_frontal vs Global_EF
-      H3: positive correlation TBR_frontal vs Flanker_Effect
+    Test hypotheses H1-H3 (pre-specified, not data-driven).
 
-    NOTE on FDR scope: correction is applied across these 8 pre-specified
-    tests only, not across all 200+ feature-outcome pairs. These hypotheses
-    were derived from the literature review (Arns et al. 2013, Zhang et al.
-    2017, Tan et al. 2024) prior to data analysis. Exploratory correlations
-    across all features would require a separate, broader FDR correction
-    and should be reported as exploratory in any publication.
+    NOTE on FDR scope: correction is applied across these pre-specified
+    tests only, not across all 200+ feature-outcome pairs.
     """
     print("\n" + "-" * 40)
     print("4A. Hypothesis Testing (Correlations)")
@@ -78,8 +73,6 @@ def run_correlations(df, config):
 
     results = []
 
-    # Pairs to test
-    # EO condition used for TBR/theta hypotheses (resting-state, eyes open)
     test_pairs = [
         ("eo_tbr_frontal_mean", "Global_EF", "H1: TBR(EO) vs Global EF (expected: negative)"),
         ("eo_psd_abs_theta_Fz", "Global_EF", "H2: Theta_Fz(EO) vs Global EF (expected: negative)"),
@@ -105,13 +98,8 @@ def run_correlations(df, config):
         if len(x) < 5:
             continue
 
-        # Use Spearman for all tests (robust to non-normality with N=28).
-        # Pearson reported as supplementary. Do not condition method on
-        # normality test — that is a form of double-dipping.
         r_spearman, p_spearman = stats.spearmanr(x, y)
         r_pearson, p_pearson = stats.pearsonr(x, y)
-
-        # Effect size: r-to-d conversion (Cohen 1988; Fritz et al. 2012)
         cohens_d = 2 * r_spearman / np.sqrt(1 - r_spearman**2 + 1e-10)
 
         results.append({
@@ -132,7 +120,6 @@ def run_correlations(df, config):
         print(f"    Spearman r = {r_spearman:.3f}, p = {p_spearman:.4f}, n = {len(x)} {'*' if p_spearman < 0.05 else 'ns'}")
         print(f"    (Pearson r = {r_pearson:.3f}, p = {p_pearson:.4f})")
 
-    # FDR correction
     if results:
         from statsmodels.stats.multitest import multipletests
 
@@ -152,17 +139,16 @@ def run_correlations(df, config):
 
 
 # ──────────────────────────────────────────────────────────────────
-# 4B. ML Classification
+# Feature sets (shared by regression + legacy classification paths)
 # ──────────────────────────────────────────────────────────────────
 
 def get_feature_sets(df, config):
     """
-    Define feature sets for comparison.
-    Returns dict: {set_name: list of column names}
+    Define feature sets for comparison. Returns dict {set_name: [columns]}.
 
     Each combined set (EO+EC) is accompanied by condition-specific subsets
-    so the ML table shows whether Eyes-Open or Eyes-Closed features drive
-    predictive performance independently.
+    so the results table shows whether Eyes-Open or Eyes-Closed features
+    drive predictive performance independently.
     """
     all_cols = df.columns.tolist()
 
@@ -174,7 +160,6 @@ def get_feature_sets(df, config):
     COV_PATTERN      = "cov_"
     QUANTUM_PATTERNS = ["qepp_", "qi_", "tn_"]
 
-    # --- Combined (EO + EC) sets ---
     conventional = [c for c in all_cols if _match(c, CONV_PATTERNS)]
     advanced     = list(dict.fromkeys(
         conventional + [c for c in all_cols if _match(c, ADV_PATTERNS)]
@@ -185,47 +170,35 @@ def get_feature_sets(df, config):
     ))
     quantum      = [c for c in all_cols if _match(c, QUANTUM_PATTERNS)]
 
-    # --- Eyes-Open only ---
-    conventional_eo = [c for c in conventional if c.startswith("eo_") or not (c.startswith("ec_"))]
-    # alpha_reactivity is cross-condition (no prefix); keep in both EO and EC sets
     conventional_eo = [c for c in conventional if not c.startswith("ec_")]
     advanced_eo     = [c for c in advanced     if not c.startswith("ec_")]
     covariance_eo   = [c for c in covariance   if not c.startswith("ec_")]
     all_features_eo = [c for c in all_features if not c.startswith("ec_")]
 
-    # --- Eyes-Closed only ---
     conventional_ec = [c for c in conventional if not c.startswith("eo_")]
     advanced_ec     = [c for c in advanced     if not c.startswith("eo_")]
     covariance_ec   = [c for c in covariance   if not c.startswith("eo_")]
     all_features_ec = [c for c in all_features if not c.startswith("eo_")]
 
     feature_sets = {
-        # Combined EO+EC
-        "conventional_qeeg":          conventional,
-        "conventional_plus_advanced":  advanced,
-        "covariance_only":             covariance,
-        "all_features":                all_features,
-        # Eyes-Open only
-        "conventional_qeeg_eo":        conventional_eo,
+        "conventional_qeeg":             conventional,
+        "conventional_plus_advanced":    advanced,
+        "covariance_only":               covariance,
+        "all_features":                  all_features,
+        "conventional_qeeg_eo":          conventional_eo,
         "conventional_plus_advanced_eo": advanced_eo,
-        "covariance_only_eo":          covariance_eo,
-        "all_features_eo":             all_features_eo,
-        # Eyes-Closed only
-        "conventional_qeeg_ec":        conventional_ec,
+        "covariance_only_eo":            covariance_eo,
+        "all_features_eo":               all_features_eo,
+        "conventional_qeeg_ec":          conventional_ec,
         "conventional_plus_advanced_ec": advanced_ec,
-        "covariance_only_ec":          covariance_ec,
-        "all_features_ec":             all_features_ec,
+        "covariance_only_ec":            covariance_ec,
+        "all_features_ec":               all_features_ec,
     }
 
-    # Quantum-inspired sets (only when those columns are present, i.e.
-    # features.include_quantum was true at extraction time)
     if quantum:
         feature_sets["quantum_only"] = quantum
         feature_sets["classical_plus_quantum"] = list(dict.fromkeys(all_features + quantum))
 
-    # Optional config-driven filter: keep only sets listed in
-    # analysis.feature_sets (strip inline YAML comments). Unknown names are
-    # skipped with a warning so a typo doesn't silently produce empty results.
     requested = config.get("analysis", {}).get("feature_sets")
     if requested:
         requested = [s.split("#")[0].strip() for s in requested if s]
@@ -237,16 +210,883 @@ def get_feature_sets(df, config):
     return feature_sets
 
 
-def _build_models(random_state, include_qsvm=False):
+# ──────────────────────────────────────────────────────────────────
+# 4B. Pre-modelling preprocessing
+#     (unsupervised feature curation + target residualization)
+# ──────────────────────────────────────────────────────────────────
+
+def run_feature_curation(X_df, params, output_dir=None):
     """
-    Build models for classification.
-    Always tries: RF, SVM, KNN, MLP + (XGBoost, LightGBM, CatBoost) if available.
-    CNN-LSTM is built in a separate path (PyTorch).
-    QSVM (quantum-kernel) models are added when ``include_qsvm`` is true and
-    pennylane is installed.
-    Gracefully skips models whose dependencies are missing.
+    Run unsupervised feature curation (variance + collinearity) and write
+    a JSON QC report. Returns (X_filtered, kept_names, report).
     """
-    from sklearn.linear_model import LogisticRegression
+    from stages.analysis.feature_curation import (
+        drop_low_variance, drop_collinear_hierarchical,
+    )
+
+    var_thresh = float(params.get("variance_threshold", 1e-6))
+    corr_thresh = float(params.get("collinearity_threshold", 0.95))
+
+    feature_names = list(X_df.columns)
+    n_input = len(feature_names)
+
+    # Pass 1: low variance
+    var_out = drop_low_variance(X_df, threshold=var_thresh)
+    X_after_var = var_out["X_filtered"]
+    n_after_var = X_after_var.shape[1]
+    dropped_var = [feature_names[i] for i in var_out["dropped_idx"].tolist()]
+
+    # Pass 2: collinearity
+    if X_after_var.shape[1] > 1:
+        col_out = drop_collinear_hierarchical(
+            X_after_var, list(X_after_var.columns), corr_threshold=corr_thresh,
+        )
+    else:
+        col_out = {
+            "X_filtered": X_after_var,
+            "kept_names": list(X_after_var.columns),
+            "dropped_names": [],
+            "cluster_map": {c: [] for c in X_after_var.columns},
+        }
+    X_final = col_out["X_filtered"]
+    n_final = X_final.shape[1]
+
+    report = {
+        "n_input": int(n_input),
+        "n_after_variance": int(n_after_var),
+        "n_after_collinearity": int(n_final),
+        "variance_threshold": var_thresh,
+        "collinearity_threshold": corr_thresh,
+        "dropped_low_variance": dropped_var,
+        "dropped_collinear": col_out["dropped_names"],
+        "kept_features": col_out["kept_names"],
+        "cluster_map": col_out["cluster_map"],
+    }
+    if output_dir is not None and params.get("save_diagnostics", True):
+        with open(os.path.join(output_dir, "feature_curation_report.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, default=str)
+
+    print(f"  Feature curation: {n_input} -> {n_after_var} (variance) -> "
+          f"{n_final} (collinearity)")
+    return X_final, list(col_out["kept_names"]), report
+
+
+def run_target_preparation(df, target_cfg, output_dir=None):
+    """
+    Residualize the primary target and derive the clinical threshold.
+    Returns dict with y_continuous, y_residual, y_binary, threshold,
+    valid_idx (intersection of feature/target/covariate non-NaN), and a
+    JSON-serializable report.
+    """
+    from stages.analysis.target_preparation import (
+        residualize_target, derive_clinical_threshold,
+    )
+
+    primary = target_cfg.get("primary", {}) or {}
+    target_name = primary.get("name", "ddm_v_incongruent")
+    covariates = primary.get("residualize_covariates") or ["age_months"]
+    threshold_cfg = target_cfg.get("clinical_threshold", {}) or {}
+    method = threshold_cfg.get("method", "tertile_bottom")
+    sens_methods = threshold_cfg.get("sensitivity_methods") or []
+
+    if target_name not in df.columns:
+        raise KeyError(
+            f"Target '{target_name}' not found in dataset. "
+            f"Available continuous targets: "
+            f"{[c for c in df.columns if c.startswith(('ddm_', 'flanker_'))][:20]}"
+        )
+
+    missing_covs = [c for c in covariates if c not in df.columns]
+    if missing_covs:
+        raise KeyError(
+            f"Residualization covariates missing: {missing_covs}. "
+            f"Available age columns: {[c for c in df.columns if 'age' in c]}"
+        )
+
+    cov_df = df[covariates]
+    y_raw = df[target_name]
+
+    res = residualize_target(y_raw, cov_df)
+    y_residual = res["y_residual"]
+
+    # Primary clinical threshold
+    primary_thr = derive_clinical_threshold(y_residual, method=method)
+
+    # Sensitivity analysis: also compute thresholds for alternate methods
+    sensitivity = {}
+    for m in sens_methods:
+        sensitivity[m] = derive_clinical_threshold(y_residual, method=m)
+
+    valid_mask = y_residual.notna() & cov_df.notna().all(axis=1)
+    valid_idx = df.index[valid_mask]
+
+    # Stats on residual
+    res_valid = y_residual.loc[valid_idx]
+    raw_valid = pd.to_numeric(y_raw, errors="coerce").loc[valid_idx]
+
+    report = {
+        "target_name": target_name,
+        "covariates": covariates,
+        "n_used_for_residualization": int(res["n_used"]),
+        "age_model_r2": round(float(res["age_model_r2"]), 4),
+        "model_coef": {k: round(v, 6) for k, v in res["model_coef"].items()},
+        "intercept": round(float(res["intercept"]), 6),
+        "raw_target_stats": {
+            "mean": round(float(raw_valid.mean()), 4),
+            "std":  round(float(raw_valid.std()), 4),
+            "skew": round(float(stats.skew(raw_valid.dropna())), 4),
+            "n":    int(raw_valid.notna().sum()),
+        },
+        "residual_stats": {
+            "mean": round(float(res_valid.mean()), 6),
+            "std":  round(float(res_valid.std()), 6),
+            "skew": round(float(stats.skew(res_valid.dropna())), 4),
+            "n":    int(res_valid.notna().sum()),
+        },
+        "primary_threshold": {
+            "method":     primary_thr["method"],
+            "quantile":   primary_thr["quantile"],
+            "threshold":  round(float(primary_thr["threshold"]), 6),
+            "prevalence": round(float(primary_thr["prevalence"]), 4),
+            "n_at_risk":  int((primary_thr["y_binary"] == 1).sum()),
+        },
+        "sensitivity_thresholds": {
+            m: {
+                "method":     v["method"],
+                "quantile":   v["quantile"],
+                "threshold":  round(float(v["threshold"]), 6),
+                "prevalence": round(float(v["prevalence"]), 4),
+                "n_at_risk":  int((v["y_binary"] == 1).sum()),
+            }
+            for m, v in sensitivity.items()
+        },
+    }
+    if output_dir is not None:
+        with open(os.path.join(output_dir, "target_preparation_report.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, default=str)
+
+    print(f"  Target: {target_name}")
+    print(f"  Covariate model R^2 (raw target ~ {covariates}): {res['age_model_r2']:.3f}")
+    print(f"  Threshold ({method}, q={primary_thr['quantile']:.3f}): "
+          f"{primary_thr['threshold']:.4f} | prevalence={primary_thr['prevalence']:.2%}")
+
+    return {
+        "target_name": target_name,
+        "y_continuous_raw": pd.to_numeric(y_raw, errors="coerce"),
+        "y_residual": y_residual,
+        "y_binary":   primary_thr["y_binary"],
+        "threshold":  primary_thr["threshold"],
+        "primary_thr_obj": primary_thr,
+        "sensitivity_thr_objs": sensitivity,
+        "valid_idx": valid_idx,
+        "report": report,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4C. Regression
+# ──────────────────────────────────────────────────────────────────
+
+def _build_regressors(random_state, enabled_models):
+    """
+    Return dict of {name: regressor} for those names listed in enabled_models.
+
+    Hyperparameter policy (CV-only protocol — no train/test holdout, no
+    nested RandomizedSearchCV):
+      - LassoCV / ElasticNetCV: built-in k-fold tuning over the
+        regularisation path. No outer wrapper needed.
+      - RandomForestRegressor: FIXED hyperparameters
+        (n_estimators=100, max_depth=3, min_samples_leaf=3) chosen
+        for N=26. No tuning — small N + tree-search makes data-driven
+        tuning produce optimistic estimates (Vabalas et al. 2019).
+      - SVR / GradientBoostingRegressor: fixed conservative defaults.
+    """
+    from sklearn.linear_model import LassoCV, ElasticNetCV
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+    from sklearn.svm import SVR
+
+    factory = {
+        "LassoCV": lambda: LassoCV(cv=5, n_alphas=50, random_state=random_state,
+                                   max_iter=5000, n_jobs=1),
+        "ElasticNetCV": lambda: ElasticNetCV(
+            cv=5, n_alphas=50, l1_ratio=[0.1, 0.5, 0.7, 0.9, 0.95, 1.0],
+            random_state=random_state, max_iter=5000, n_jobs=1,
+        ),
+        "RandomForestRegressor": lambda: RandomForestRegressor(
+            n_estimators=100, max_depth=3, min_samples_leaf=3,
+            random_state=random_state, n_jobs=1,
+        ),
+        "SVR": lambda: SVR(kernel="rbf", C=1.0, gamma="scale"),
+        "GradientBoostingRegressor": lambda: GradientBoostingRegressor(
+            n_estimators=100, max_depth=3, learning_rate=0.05,
+            random_state=random_state,
+        ),
+    }
+    out = {}
+    for name in enabled_models:
+        name_clean = name.split("#")[0].strip()
+        if name_clean not in factory:
+            print(f"  [WARN] Unknown regressor '{name_clean}', skipping.")
+            continue
+        out[name_clean] = factory[name_clean]()
+    return out
+
+
+def _make_cv(cv_cfg, random_state_default):
+    from sklearn.model_selection import RepeatedKFold
+    return RepeatedKFold(
+        n_splits=int(cv_cfg.get("n_splits", 5)),
+        n_repeats=int(cv_cfg.get("n_repeats", 5)),
+        random_state=int(cv_cfg.get("random_state", random_state_default)),
+    )
+
+
+def _build_regression_pipeline(model, univariate_cfg, n_features_in):
+    """
+    Build sklearn Pipeline: SimpleImputer -> StandardScaler ->
+    [optional univariate filter] -> regressor.
+    """
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
+
+    steps = [
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler",  StandardScaler()),
+    ]
+    if univariate_cfg.get("enable", False):
+        from sklearn.feature_selection import SelectKBest, mutual_info_regression, f_regression
+        method = univariate_cfg.get("method", "mutual_info_regression")
+        score_func = mutual_info_regression if method == "mutual_info_regression" else f_regression
+        if univariate_cfg.get("k_adaptive", True):
+            k = max(5, min(40, n_features_in // 5))
+        else:
+            k = int(univariate_cfg.get("k", 20))
+        k = min(k, max(n_features_in, 1))
+        steps.append(("select", SelectKBest(score_func, k=k)))
+    steps.append(("reg", model))
+    return Pipeline(steps)
+
+
+def _pearson_safe(y_true, y_pred):
+    if len(y_true) < 2:
+        return float("nan")
+    if np.std(y_true) == 0 or np.std(y_pred) == 0:
+        return float("nan")
+    r, _ = stats.pearsonr(y_true, y_pred)
+    return float(r)
+
+
+def _spearman_safe(y_true, y_pred):
+    if len(y_true) < 2:
+        return float("nan")
+    r, _ = stats.spearmanr(y_true, y_pred)
+    return float(r)
+
+
+def run_regression(X_df, y_residual, feature_sets, config, output_dir):
+    """
+    Run regression CV across (feature_set, model) combinations.
+
+    Returns:
+        regression_results_df: per-fold and per-repeat metrics.
+        best_info: dict {feature_set, model, mean_pearson_r}.
+        oof_predictions: dict (fs_name, model_name) -> dict with
+            y_true, y_pred (OOF concatenation across all folds/repeats),
+            and per-repeat mean Pearson r used for downstream screening.
+    """
+    from sklearn.model_selection import cross_val_predict
+    from sklearn.metrics import mean_absolute_error, r2_score
+
+    ana = config["analysis"]
+    cv_cfg = ana.get("cv", {}) or {}
+    random_state = config["random_state"]
+    cv = _make_cv(cv_cfg, random_state)
+
+    enabled_models = [m.split("#")[0].strip() for m in (ana.get("models") or [])
+                      if isinstance(m, str) and m.strip()]
+    models = _build_regressors(random_state, enabled_models)
+    if not models:
+        print("  ERROR: No regressors enabled. Check analysis.models in config.yaml")
+        return pd.DataFrame(), {}, {}
+    print(f"  Regressors enabled: {list(models.keys())}")
+
+    univariate_cfg = ana.get("univariate_filter", {}) or {}
+
+    # Restrict to subjects with non-NaN target (residualization may yield NaN
+    # for rows missing covariates).
+    valid_mask = y_residual.notna()
+    y_use = y_residual.loc[valid_mask]
+    X_use = X_df.loc[valid_mask]
+    print(f"  Regression sample: N={len(y_use)} after dropping NaN target")
+
+    rows = []
+    oof_predictions = {}
+
+    for fs_name, fs_cols in feature_sets.items():
+        cols_present = [c for c in fs_cols if c in X_use.columns]
+        if not cols_present:
+            continue
+        X_fs = X_use[cols_present]
+
+        for model_name, factory_model in models.items():
+            try:
+                # Per-fold metrics: walk CV manually so we get fold-level r/spearman.
+                fold_pearson, fold_spearman, fold_r2, fold_mae = [], [], [], []
+                # Manual CV loop over the repeated splitter for per-fold scores.
+                n_splits = int(cv_cfg.get("n_splits", 5))
+                for k, (train_idx, test_idx) in enumerate(cv.split(X_fs, y_use)):
+                    pipe_k = _build_regression_pipeline(
+                        factory_model, univariate_cfg, len(cols_present)
+                    )
+                    pipe_k.fit(X_fs.iloc[train_idx], y_use.iloc[train_idx])
+                    y_hat = pipe_k.predict(X_fs.iloc[test_idx])
+                    y_te  = y_use.iloc[test_idx].values
+
+                    fold_pearson.append(_pearson_safe(y_te, y_hat))
+                    fold_spearman.append(_spearman_safe(y_te, y_hat))
+                    try:
+                        fold_r2.append(float(r2_score(y_te, y_hat)))
+                    except Exception:
+                        fold_r2.append(float("nan"))
+                    fold_mae.append(float(mean_absolute_error(y_te, y_hat)))
+
+                    rows.append({
+                        "feature_set": fs_name,
+                        "n_features_input": len(cols_present),
+                        "model": model_name,
+                        "repeat": k // n_splits,
+                        "fold":   k % n_splits,
+                        "pearson_r":  fold_pearson[-1],
+                        "spearman_r": fold_spearman[-1],
+                        "r2":         fold_r2[-1],
+                        "mae":        fold_mae[-1],
+                    })
+
+                # Out-of-fold predictions across one full RepeatedKFold pass
+                # (used for screening metrics). cross_val_predict here uses
+                # only the first repeat's partition; that is fine for binary
+                # screening — we just need a single OOF prediction per subject.
+                from sklearn.model_selection import KFold
+                single_cv = KFold(
+                    n_splits=int(cv_cfg.get("n_splits", 5)),
+                    shuffle=True, random_state=random_state,
+                )
+                pipe_oof = _build_regression_pipeline(
+                    factory_model, univariate_cfg, len(cols_present),
+                )
+                y_oof = cross_val_predict(pipe_oof, X_fs, y_use, cv=single_cv, n_jobs=1)
+                oof_predictions[(fs_name, model_name)] = {
+                    "y_true": y_use.values.copy(),
+                    "y_pred": np.asarray(y_oof, dtype=float),
+                    "valid_index": y_use.index.copy(),
+                    "mean_pearson": float(np.nanmean(fold_pearson)),
+                }
+
+                print(f"  {fs_name:30s} | {model_name:22s} | "
+                      f"r={np.nanmean(fold_pearson):+.3f} (sd {np.nanstd(fold_pearson):.3f}) | "
+                      f"rho={np.nanmean(fold_spearman):+.3f} | "
+                      f"R²={np.nanmean(fold_r2):+.3f} | "
+                      f"MAE={np.nanmean(fold_mae):.3f}")
+
+            except Exception as e:
+                logger.error(f"{fs_name} | {model_name} | {e}")
+                print(f"  {fs_name} | {model_name} | ERROR: {e}")
+            finally:
+                gc.collect()
+
+    df_results = pd.DataFrame(rows)
+    if df_results.empty:
+        return df_results, {}, oof_predictions
+
+    # Best by mean Pearson r per (feature_set, model)
+    summary = (df_results.groupby(["feature_set", "model"])["pearson_r"]
+                          .mean().reset_index()
+                          .rename(columns={"pearson_r": "mean_pearson_r"}))
+    summary = summary.sort_values("mean_pearson_r", ascending=False)
+    best_row = summary.iloc[0]
+    best_info = {
+        "feature_set": best_row["feature_set"],
+        "model": best_row["model"],
+        "mean_pearson_r": float(best_row["mean_pearson_r"]),
+    }
+    print(f"\n  BEST regressor: {best_info['model']} on '{best_info['feature_set']}' "
+          f"(mean Pearson r = {best_info['mean_pearson_r']:+.3f})")
+
+    df_results.to_csv(os.path.join(output_dir, "regression_results.csv"),
+                      index=False)
+    return df_results, best_info, oof_predictions
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4C-2. Clinical screening from regression predictions
+# ──────────────────────────────────────────────────────────────────
+
+def _binary_metrics_from_continuous(y_true_cont, y_pred_cont, threshold,
+                                    direction_at_risk_low=True):
+    """
+    Apply a continuous threshold to true and predicted values and compute
+    standard screening metrics. AUC uses the continuous predictions
+    directly so it is threshold-free.
+    """
+    from sklearn.metrics import (
+        balanced_accuracy_score, f1_score, recall_score, roc_auc_score,
+        precision_score,
+    )
+
+    y_true_bin = (y_true_cont <= threshold).astype(int) if direction_at_risk_low \
+                 else (y_true_cont >= threshold).astype(int)
+    y_pred_bin = (y_pred_cont <= threshold).astype(int) if direction_at_risk_low \
+                 else (y_pred_cont >= threshold).astype(int)
+
+    # Score that is HIGHER for at-risk subjects (sklearn AUC convention).
+    score_for_risk = -y_pred_cont if direction_at_risk_low else y_pred_cont
+
+    out = {
+        "sensitivity":      recall_score(y_true_bin, y_pred_bin, pos_label=1, zero_division=0),
+        "specificity":      recall_score(y_true_bin, y_pred_bin, pos_label=0, zero_division=0),
+        "ppv":              precision_score(y_true_bin, y_pred_bin, pos_label=1, zero_division=0),
+        "npv":              precision_score(y_true_bin, y_pred_bin, pos_label=0, zero_division=0),
+        "f1":               f1_score(y_true_bin, y_pred_bin, zero_division=0),
+        "balanced_accuracy": balanced_accuracy_score(y_true_bin, y_pred_bin),
+        "n_pos_true":       int((y_true_bin == 1).sum()),
+        "n_pos_pred":       int((y_pred_bin == 1).sum()),
+    }
+    try:
+        out["auc"] = float(roc_auc_score(y_true_bin, score_for_risk))
+    except Exception:
+        out["auc"] = float("nan")
+    return out
+
+
+def run_clinical_screening(oof_predictions, target_prep, output_dir):
+    """
+    Convert OOF regression predictions into binary screening metrics by
+    applying the pre-computed clinical threshold (and sensitivity-analysis
+    thresholds).
+    Returns the metrics DataFrame.
+    """
+    rows = []
+    primary_thr = target_prep["primary_thr_obj"]
+    sens_thrs   = target_prep["sensitivity_thr_objs"]
+
+    threshold_objs = {primary_thr["method"]: primary_thr, **sens_thrs}
+
+    for (fs_name, model_name), oof in oof_predictions.items():
+        for thr_method, thr_obj in threshold_objs.items():
+            metrics = _binary_metrics_from_continuous(
+                oof["y_true"], oof["y_pred"],
+                threshold=thr_obj["threshold"],
+                direction_at_risk_low=True,
+            )
+            row = {
+                "feature_set":      fs_name,
+                "model":            model_name,
+                "threshold_method": thr_method,
+                "threshold_value":  round(float(thr_obj["threshold"]), 6),
+                "is_primary":       thr_method == primary_thr["method"],
+            }
+            row.update({k: (round(v, 4) if isinstance(v, float) else v)
+                        for k, v in metrics.items()})
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["is_primary", "auc"], ascending=[False, False])
+        df.to_csv(os.path.join(output_dir, "clinical_screening_metrics.csv"),
+                  index=False)
+
+        primary = df[df["is_primary"]]
+        if not primary.empty:
+            top = primary.iloc[0]
+            print(f"\n  Best clinical screening (primary threshold "
+                  f"'{top['threshold_method']}'): "
+                  f"AUC={top['auc']:.3f}, sens={top['sensitivity']:.3f}, "
+                  f"spec={top['specificity']:.3f} "
+                  f"({top['model']} on '{top['feature_set']}')")
+
+    return df
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4D. Statistical validation: permutation + bootstrap + FDR
+# ──────────────────────────────────────────────────────────────────
+
+def run_permutation_test(X_df, y_residual, feature_sets, regression_results_df,
+                         config, output_dir):
+    """
+    Permutation test on the BEST (feature_set, model) by mean Pearson r.
+    Permutes y; uses cross_val_predict to get OOF predictions per
+    permutation, then Pearson r on those.
+    """
+    from sklearn.model_selection import KFold, cross_val_predict
+
+    ana = config["analysis"]
+    n_perm = int((ana.get("validation", {}) or {}).get("permutation_n", 200))
+    cv_cfg = ana.get("cv", {}) or {}
+    random_state = config["random_state"]
+
+    if regression_results_df.empty:
+        return {}
+
+    summary = (regression_results_df.groupby(["feature_set", "model"])["pearson_r"]
+                                    .mean().reset_index()
+                                    .sort_values("pearson_r", ascending=False))
+    best = summary.iloc[0]
+    best_fs, best_model = best["feature_set"], best["model"]
+
+    enabled_models = ana.get("models", []) or []
+    enabled_models = [m.split("#")[0].strip() for m in enabled_models if m]
+    models = _build_regressors(random_state, enabled_models)
+    model = models.get(best_model)
+    if model is None:
+        return {}
+
+    cols_present = [c for c in feature_sets[best_fs] if c in X_df.columns]
+    valid_mask = y_residual.notna()
+    X_fs = X_df.loc[valid_mask, cols_present]
+    y_use = y_residual.loc[valid_mask].values
+
+    univariate_cfg = ana.get("univariate_filter", {}) or {}
+    cv = KFold(
+        n_splits=int(cv_cfg.get("n_splits", 5)),
+        shuffle=True, random_state=random_state,
+    )
+
+    print(f"\n  Permutation test ({n_perm} perms): {best_model} on '{best_fs}'...")
+
+    pipe = _build_regression_pipeline(model, univariate_cfg, len(cols_present))
+    y_pred = cross_val_predict(pipe, X_fs, y_use, cv=cv, n_jobs=1)
+    observed_r = _pearson_safe(y_use, y_pred)
+
+    rng = np.random.RandomState(random_state)
+    null_r = []
+    for i in range(n_perm):
+        y_perm = rng.permutation(y_use)
+        try:
+            pipe_perm = _build_regression_pipeline(
+                _build_regressors(random_state, [best_model])[best_model],
+                univariate_cfg, len(cols_present),
+            )
+            y_pred_perm = cross_val_predict(pipe_perm, X_fs, y_perm, cv=cv, n_jobs=1)
+            null_r.append(_pearson_safe(y_perm, y_pred_perm))
+        except Exception:
+            null_r.append(float("nan"))
+
+    null_r = np.array(null_r, dtype=float)
+    null_r = null_r[~np.isnan(null_r)]
+    p_value = float((np.sum(null_r >= observed_r) + 1) / (len(null_r) + 1))
+    print(f"    observed r = {observed_r:+.3f} | null mean = "
+          f"{np.mean(null_r):+.3f} | p = {p_value:.4f}")
+
+    payload = {
+        "best_feature_set": best_fs,
+        "best_model":       best_model,
+        "metric":           "pearson_r",
+        "observed":         round(float(observed_r), 4),
+        "null_mean":        round(float(np.mean(null_r)), 4),
+        "null_std":         round(float(np.std(null_r)), 4),
+        "p_value":          round(float(p_value), 4),
+        "n_permutations":   int(len(null_r)),
+        "null_distribution": [round(float(v), 4) for v in null_r],
+    }
+    with open(os.path.join(output_dir, "permutation_results.json"),
+              "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+    return payload
+
+
+def run_bootstrap_ci(oof_predictions, screening_df, target_prep, config,
+                     output_dir):
+    """
+    Bootstrap 95% CI on (a) Pearson r per (feature_set, model) and
+    (b) AUC per (feature_set, model, threshold_method).
+    """
+    from sklearn.metrics import roc_auc_score
+
+    ana = config["analysis"]
+    n_boot = int((ana.get("validation", {}) or {}).get("bootstrap_n", 1000))
+    rng = np.random.RandomState(config["random_state"])
+
+    primary_thr = target_prep["primary_thr_obj"]
+    sens_thrs   = target_prep["sensitivity_thr_objs"]
+    threshold_objs = {primary_thr["method"]: primary_thr, **sens_thrs}
+
+    pearson_cis = {}
+    auc_cis = {}
+
+    for (fs_name, model_name), oof in oof_predictions.items():
+        y_true = oof["y_true"]
+        y_pred = oof["y_pred"]
+        n = len(y_true)
+        if n < 5:
+            continue
+
+        boot_r, boot_auc = {m: [] for m in threshold_objs}, {m: [] for m in threshold_objs}
+        boot_pearson = []
+        for _ in range(n_boot):
+            idx = rng.randint(0, n, size=n)
+            y_t = y_true[idx]
+            y_p = y_pred[idx]
+            boot_pearson.append(_pearson_safe(y_t, y_p))
+            for thr_method, thr_obj in threshold_objs.items():
+                y_bin = (y_t <= thr_obj["threshold"]).astype(int)
+                if len(np.unique(y_bin)) < 2:
+                    boot_auc[thr_method].append(float("nan"))
+                    continue
+                try:
+                    auc = roc_auc_score(y_bin, -y_p)
+                    boot_auc[thr_method].append(float(auc))
+                except Exception:
+                    boot_auc[thr_method].append(float("nan"))
+
+        boot_pearson = np.array(boot_pearson, dtype=float)
+        boot_pearson = boot_pearson[~np.isnan(boot_pearson)]
+        if boot_pearson.size:
+            pearson_cis[f"{fs_name}|{model_name}"] = {
+                "metric": "pearson_r",
+                "ci_lower": round(float(np.percentile(boot_pearson, 2.5)), 4),
+                "ci_upper": round(float(np.percentile(boot_pearson, 97.5)), 4),
+                "median":   round(float(np.percentile(boot_pearson, 50)), 4),
+            }
+        for thr_method, vals in boot_auc.items():
+            arr = np.array(vals, dtype=float)
+            arr = arr[~np.isnan(arr)]
+            if arr.size:
+                auc_cis[f"{fs_name}|{model_name}|{thr_method}"] = {
+                    "metric": "auc",
+                    "threshold_method": thr_method,
+                    "ci_lower": round(float(np.percentile(arr, 2.5)), 4),
+                    "ci_upper": round(float(np.percentile(arr, 97.5)), 4),
+                    "median":   round(float(np.percentile(arr, 50)), 4),
+                }
+
+    payload = {
+        "n_bootstrap": n_boot,
+        "pearson_r":   pearson_cis,
+        "screening_auc": auc_cis,
+    }
+    with open(os.path.join(output_dir, "bootstrap_ci.json"),
+              "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+    return payload
+
+
+def apply_fdr_to_pearson(regression_results_df, output_dir):
+    """
+    Per-(feature_set, model) one-sample t-test of fold-level Pearson r > 0,
+    then BH-FDR across the resulting p-values. Result merged into a
+    ``regression_summary.csv`` for the audit trail.
+    """
+    if regression_results_df.empty:
+        return pd.DataFrame()
+
+    from statsmodels.stats.multitest import multipletests
+
+    rows = []
+    grouped = regression_results_df.groupby(["feature_set", "model"])
+    for (fs, mdl), g in grouped:
+        rs = g["pearson_r"].dropna().values
+        if rs.size < 2:
+            continue
+        # One-sample t-test against 0 (one-sided: r > 0 desired).
+        t_stat, p_two = stats.ttest_1samp(rs, 0.0)
+        p_one = float(p_two / 2 if t_stat > 0 else 1 - p_two / 2)
+        rows.append({
+            "feature_set":   fs,
+            "model":         mdl,
+            "mean_pearson":  round(float(np.mean(rs)), 4),
+            "std_pearson":   round(float(np.std(rs)), 4),
+            "t_stat":        round(float(t_stat), 4),
+            "p_one_sided":   round(p_one, 4),
+        })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    pvals = df["p_one_sided"].values
+    _, p_fdr, _, _ = multipletests(pvals, method="fdr_bh")
+    df["p_fdr"] = np.round(p_fdr, 4)
+    df["sig_fdr"] = ["**" if p < 0.01 else "*" if p < 0.05 else "ns"
+                     for p in p_fdr]
+    df = df.sort_values("mean_pearson", ascending=False)
+    df.to_csv(os.path.join(output_dir, "regression_summary.csv"), index=False)
+    return df
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4E. QC plots
+# ──────────────────────────────────────────────────────────────────
+
+def _save_target_distribution_plot(y_raw, y_residual, threshold, output_dir,
+                                   target_name):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"  [WARN] matplotlib unavailable: {e}")
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    raw_vals = pd.to_numeric(y_raw, errors="coerce").dropna().values
+    res_vals = y_residual.dropna().values
+
+    axes[0].hist(raw_vals, bins=15, color="#888888", edgecolor="black")
+    axes[0].set_title(f"Raw {target_name}")
+    axes[0].set_xlabel(target_name)
+    axes[0].set_ylabel("count")
+
+    axes[1].hist(res_vals, bins=15, color="#3a7", edgecolor="black")
+    axes[1].axvline(threshold, color="crimson", linestyle="--",
+                    label=f"threshold = {threshold:.3f}")
+    axes[1].set_title(f"Age-residualized {target_name}")
+    axes[1].set_xlabel(f"residual({target_name} | covariates)")
+    axes[1].legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, "target_distribution.png"), dpi=130)
+    plt.close(fig)
+
+
+def _save_correlation_heatmaps(X_before, X_after, output_dir, max_features=80):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    def _heatmap(X, path, title):
+        cols = list(X.columns)
+        if len(cols) > max_features:
+            # Sort by variance and show the top max_features so the heatmap
+            # remains legible on wide matrices.
+            order = np.argsort(-np.nanvar(X.values, axis=0))[:max_features]
+            X = X.iloc[:, order]
+            cols = list(X.columns)
+        if len(cols) < 2:
+            return
+        corr = X.corr().values
+        fig, ax = plt.subplots(figsize=(min(10, 0.13 * len(cols) + 4),
+                                        min(10, 0.13 * len(cols) + 4)))
+        im = ax.imshow(np.abs(corr), cmap="viridis", vmin=0, vmax=1)
+        ax.set_title(f"{title} (|corr|, top {len(cols)} by variance)")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(path, dpi=130)
+        plt.close(fig)
+
+    _heatmap(X_before,
+             os.path.join(output_dir, "feature_correlation_heatmap_before.png"),
+             "Before curation")
+    _heatmap(X_after,
+             os.path.join(output_dir, "feature_correlation_heatmap_after.png"),
+             "After curation")
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4F. SHAP (regressor edition)
+# ──────────────────────────────────────────────────────────────────
+
+def run_shap_regression(X_df, y_residual, best_info, config, output_dir):
+    """
+    SHAP for the best regressor on the curated feature matrix. Uses
+    TreeExplainer when the model is tree-based, otherwise falls back to
+    LinearExplainer / KernelExplainer.
+    """
+    if not best_info:
+        return None
+    try:
+        import shap
+    except ImportError:
+        print("  SHAP not installed. pip install shap")
+        return None
+
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+    from sklearn.linear_model import LassoCV, ElasticNetCV
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
+
+    valid_mask = y_residual.notna()
+    y = y_residual.loc[valid_mask].values
+    X = X_df.loc[valid_mask].copy()
+
+    print(f"\n  SHAP on best regressor: {best_info['model']} "
+          f"(curated features, n={X.shape[1]})")
+
+    imputer = SimpleImputer(strategy="median")
+    scaler  = StandardScaler()
+    X_proc = scaler.fit_transform(imputer.fit_transform(X.values))
+
+    name = best_info["model"]
+    rs = config["random_state"]
+    # Single source of truth for hyperparameters: _build_regressors.
+    # Fall back to RandomForestRegressor for SVR / unknown so SHAP can
+    # use a tree explainer.
+    built = _build_regressors(rs, [name, "RandomForestRegressor"])
+    model = built.get(name)
+    if model is None:
+        model = built["RandomForestRegressor"]
+
+    model.fit(X_proc, y)
+
+    try:
+        if isinstance(model, (RandomForestRegressor, GradientBoostingRegressor)):
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(X_proc)
+        elif isinstance(model, (LassoCV, ElasticNetCV)):
+            explainer = shap.LinearExplainer(model, X_proc)
+            shap_values = explainer.shap_values(X_proc)
+        else:
+            explainer = shap.Explainer(model.predict, X_proc[: min(50, len(X_proc))])
+            shap_values = explainer(X_proc).values
+    except Exception as e:
+        print(f"  [WARN] SHAP failed: {e}")
+        return None
+
+    mean_abs = np.mean(np.abs(shap_values), axis=0)
+    importance = (pd.DataFrame({"feature": X.columns, "mean_abs_shap": mean_abs})
+                    .sort_values("mean_abs_shap", ascending=False))
+    importance.to_csv(os.path.join(output_dir, "shap_importance.csv"), index=False)
+
+    print("\n  Top biomarker candidates (regression SHAP):")
+    for _, row in importance.head(10).iterrows():
+        print(f"    {row['feature']:40s}  SHAP: {row['mean_abs_shap']:.4f}")
+
+    try:
+        from utils.bio_interpretation import interpret_biomarkers
+        annotated = interpret_biomarkers(importance)
+        annotated.to_csv(os.path.join(output_dir, "shap_annotated.csv"), index=False)
+    except Exception:
+        pass
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        figures_dir = os.path.join(output_dir, "figures")
+        os.makedirs(figures_dir, exist_ok=True)
+        shap.summary_plot(shap_values, X_proc, feature_names=list(X.columns),
+                          show=False)
+        plt.tight_layout()
+        plt.savefig(os.path.join(figures_dir, "shap_summary.png"),
+                    dpi=150, bbox_inches="tight")
+        plt.close()
+    except Exception as e:
+        print(f"  [WARN] Could not save SHAP plot: {e}")
+
+    return importance
+
+
+# ──────────────────────────────────────────────────────────────────
+# 4-LEGACY. Binary classification (kept behind config flag)
+# ──────────────────────────────────────────────────────────────────
+
+def _build_legacy_classifiers(random_state, enabled_models, include_qsvm=False):
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.svm import SVC
     from sklearn.neighbors import KNeighborsClassifier
@@ -255,85 +1095,13 @@ def _build_models(random_state, include_qsvm=False):
     models = {
         "RandomForest": RandomForestClassifier(
             n_estimators=100, max_depth=3,
-            class_weight="balanced", random_state=random_state
-        ),
+            class_weight="balanced", random_state=random_state),
         "SVM": SVC(kernel="rbf", C=1.0, probability=True,
                    class_weight="balanced", random_state=random_state),
         "KNN": KNeighborsClassifier(n_neighbors=5),
-        "MLP": MLPClassifier(
-            hidden_layer_sizes=(64, 32), max_iter=500,
-            early_stopping=True, random_state=random_state
-        ),
+        "MLP": MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=500,
+                             early_stopping=True, random_state=random_state),
     }
-
-    # XGBoost
-    try:
-        from xgboost import XGBClassifier
-        models["XGBoost"] = XGBClassifier(
-            n_estimators=50, max_depth=3, learning_rate=0.1,
-            random_state=random_state, use_label_encoder=False,
-            eval_metric="logloss", verbosity=0,
-        )
-    except ImportError:
-        print("  [INFO] XGBoost not installed — skipping")
-
-    # LightGBM
-    try:
-        from lightgbm import LGBMClassifier
-        models["LightGBM"] = LGBMClassifier(
-            n_estimators=100, max_depth=3, learning_rate=0.1,
-            num_leaves=8, min_child_samples=5,
-            random_state=random_state, verbose=-1,
-        )
-    except ImportError:
-        print("  [INFO] LightGBM not installed — skipping")
-
-    # CatBoost — wrapped for sklearn 1.8+ compatibility
-    try:
-        from catboost import CatBoostClassifier as _CatBoost
-        from sklearn.base import BaseEstimator, ClassifierMixin
-
-        class CatBoostWrapper(BaseEstimator, ClassifierMixin):
-            """Thin wrapper to fix CatBoost/sklearn tags compatibility."""
-            _estimator_type = "classifier"
-
-            def __init__(self, iterations=100, depth=3, learning_rate=0.1,
-                         random_state=42, verbose=0):
-                self.iterations = iterations
-                self.depth = depth
-                self.learning_rate = learning_rate
-                self.random_state = random_state
-                self.verbose = verbose
-
-            def fit(self, X, y):
-                self._model = _CatBoost(
-                    iterations=self.iterations, depth=self.depth,
-                    learning_rate=self.learning_rate,
-                    random_seed=self.random_state, verbose=self.verbose,
-                )
-                self._model.fit(X, y)
-                self.classes_ = np.array(sorted(set(y)))
-                return self
-
-            def predict(self, X):
-                return self._model.predict(X).flatten().astype(int)
-
-            def predict_proba(self, X):
-                return self._model.predict_proba(X)
-
-            def __sklearn_tags__(self):
-                tags = super().__sklearn_tags__()
-                tags.estimator_type = "classifier"
-                return tags
-
-        models["CatBoost"] = CatBoostWrapper(
-            iterations=100, depth=3, learning_rate=0.1,
-            random_state=random_state, verbose=0,
-        )
-    except ImportError:
-        print("  [INFO] CatBoost not installed — skipping")
-
-    # Quantum-kernel SVM models (opt-in via ml.include_qsvm)
     if include_qsvm:
         try:
             from stages.analysis.qsvm_classifier import QuantumKernelSVM
@@ -342,734 +1110,288 @@ def _build_models(random_state, include_qsvm=False):
             models["QSVM_6q_prod"] = QuantumKernelSVM(n_qubits=6, n_layers=2, C=1.0, use_entangling=False)
         except ImportError:
             print("  [INFO] QSVM requested but pennylane not installed — skipping")
-
-    return models
-
-
-def _make_scoring():
-    """Return scoring dict with all metrics from the proposal."""
-    from sklearn.metrics import make_scorer, balanced_accuracy_score, \
-        f1_score, roc_auc_score, recall_score
-
-    return {
-        "balanced_accuracy": "balanced_accuracy",
-        "f1": "f1",
-        "roc_auc": "roc_auc",
-        "sensitivity": make_scorer(recall_score, pos_label=1),
-        "specificity": make_scorer(recall_score, pos_label=0),
-    }
+    return {k: v for k, v in models.items() if k in enabled_models}
 
 
-def run_classification(df, config, target=None):
+def run_legacy_classification(df, config, target, output_dir):
     """
-    ML classification comparing feature sets and models.
-    Implements all 8 algorithms from the research proposal (Section 2.4.2):
-    RF, XGBoost, LightGBM, CatBoost, SVM, KNN, MLP, CNN-LSTM.
-
-    Args:
-        target: continuous behavioral column to predict. Falls back to
-                ml.target/ml.targets[0] in config when None.
+    Pre-refactor classification flow on the same continuous target,
+    binarized via fold-internal median split. Kept for sensitivity-analysis
+    comparison against the regression pipeline.
     """
-    from sklearn.model_selection import RepeatedStratifiedKFold, \
-        permutation_test_score
+    from sklearn.model_selection import RepeatedStratifiedKFold
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
     from sklearn.impute import SimpleImputer
     from sklearn.feature_selection import SelectKBest, f_classif
-    from sklearn.metrics import balanced_accuracy_score, f1_score, \
-        roc_auc_score, recall_score
+    from sklearn.metrics import (
+        balanced_accuracy_score, f1_score, roc_auc_score, recall_score,
+    )
 
-    logger.info("4B. ML Classification")
     print("\n" + "-" * 40)
-    print("4B. ML Classification")
+    print("4-LEGACY. Binary classification (median split inside CV)")
     print("-" * 40)
 
-    # Use continuous EF scores — median split done INSIDE each CV fold
-    # to prevent target leakage (threshold from training fold only)
-    if target is None:
-        from utils.io import get_targets
-        target = get_targets(config)[0]
-    continuous_col = target
-    if continuous_col not in df.columns or df[continuous_col].isna().all():
-        print(f"  ERROR: Target '{continuous_col}' not found or all-NaN. "
-              f"Check ml.targets in config.yaml")
-        return pd.DataFrame(), {}
-    print(f"  Target variable: {continuous_col}")
+    legacy_cfg = (config["analysis"].get("legacy_classification") or {})
+    cv_folds = int(legacy_cfg.get("cv_folds", 5))
+    cv_repeats = int(legacy_cfg.get("cv_repeats", 5))
+    enabled = legacy_cfg.get("models", ["RandomForest", "SVM"])
+    enabled = [m.split("#")[0].strip() for m in enabled if m]
+    include_qsvm = bool(legacy_cfg.get("include_qsvm", False))
+    random_state = config["random_state"]
 
-    y_continuous = df[continuous_col].dropna()
+    if target not in df.columns or df[target].isna().all():
+        print(f"  ERROR: target '{target}' missing.")
+        return pd.DataFrame()
+
+    y_continuous = df[target].dropna()
     valid_idx = y_continuous.index
-
-    # Global median split for permutation test (sklearn requires fixed y)
     global_median = y_continuous.median()
     y_global = (y_continuous > global_median).astype(int)
 
     feature_sets = get_feature_sets(df, config)
-    ana = config["analysis"]
-    cv_folds = ana["cv_folds"]
-    cv_repeats = ana["cv_repeats"]
-    random_state = config["random_state"]
+    requested_fs = legacy_cfg.get("feature_sets")
+    if requested_fs:
+        feature_sets = {k: v for k, v in feature_sets.items() if k in requested_fs}
 
-    cv = RepeatedStratifiedKFold(
-        n_splits=cv_folds, n_repeats=cv_repeats, random_state=random_state
-    )
-
-    enabled_models = ana.get("models", [])
-    # Strip inline YAML comments that survive as trailing text (e.g. "XGBoost # requires...")
-    enabled_models = [m.split("#")[0].strip() for m in enabled_models if m]
-    include_qsvm = ana.get("include_qsvm", False)
-    if include_qsvm:
-        # Auto-include QSVM model names so the user doesn't need to list each one
-        for q in ("QSVM_4q_ZZ", "QSVM_6q_ZZ", "QSVM_6q_prod"):
-            if q not in enabled_models:
-                enabled_models.append(q)
-    models = {k: v for k, v in _build_models(random_state, include_qsvm=include_qsvm).items()
-              if k in enabled_models}
+    cv = RepeatedStratifiedKFold(n_splits=cv_folds, n_repeats=cv_repeats,
+                                 random_state=random_state)
+    models = _build_legacy_classifiers(random_state, enabled, include_qsvm=include_qsvm)
     if not models:
-        print("  ERROR: No models enabled. Check ml.models in config.yaml")
-        return pd.DataFrame(), {}
-    print(f"  Models enabled: {list(models.keys())}")
+        return pd.DataFrame()
 
-    results = []
-
+    rows = []
     for fs_name, fs_cols in feature_sets.items():
-        fs_cols_valid = [c for c in fs_cols if c in df.columns]
-        if not fs_cols_valid:
+        cols = [c for c in fs_cols if c in df.columns]
+        if not cols:
             continue
-
-        X = df.loc[valid_idx, fs_cols_valid]
-
-        # Feature selection: adaptive k based on feature set size
-        n_select = max(5, min(15, len(fs_cols_valid) // 10))
-        n_select = min(n_select, len(fs_cols_valid))
+        X = df.loc[valid_idx, cols]
+        n_select = max(5, min(15, len(cols) // 10))
+        n_select = min(n_select, len(cols))
 
         for model_name, model in models.items():
-            # Manual CV loop with fold-internal median split
-            # This prevents target leakage: the binarization threshold
-            # is computed on TRAINING data only in each fold
-            fold_metrics = {
-                "bal_acc": [], "f1": [], "auc": [],
-                "sens": [], "spec": [],
-            }
-
-            is_qsvm = model_name.startswith("QSVM")
-
+            fold_metrics = {"bal_acc": [], "f1": [], "auc": [], "sens": [], "spec": []}
             try:
                 for train_idx, test_idx in cv.split(X, y_global):
-                    X_train = X.iloc[train_idx]
-                    X_test = X.iloc[test_idx]
+                    X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
+                    train_med = y_continuous.iloc[train_idx].median()
+                    y_tr = (y_continuous.iloc[train_idx] > train_med).astype(int)
+                    y_te = (y_continuous.iloc[test_idx]  > train_med).astype(int)
 
-                    # Compute median on training fold only
-                    train_median = y_continuous.iloc[train_idx].median()
-                    y_train = (y_continuous.iloc[train_idx] > train_median).astype(int)
-                    y_test = (y_continuous.iloc[test_idx] > train_median).astype(int)
+                    pipe = Pipeline([
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler",  StandardScaler()),
+                        ("select",  SelectKBest(f_classif, k=n_select)),
+                        ("clf",     model),
+                    ])
+                    pipe.fit(X_tr, y_tr)
+                    preds = pipe.predict(X_te)
 
-                    if is_qsvm:
-                        # QSVM does its own PCA + scaling internally; only impute NaNs
-                        imputer = SimpleImputer(strategy="median")
-                        X_train_in = imputer.fit_transform(X_train)
-                        X_test_in  = imputer.transform(X_test)
-                        model.fit(X_train_in, y_train)
-                        pipe = model  # used for predict_proba/decision_function below
-                    else:
-                        pipe = Pipeline([
-                            ("imputer", SimpleImputer(strategy="median")),
-                            ("scaler", StandardScaler()),
-                            ("select", SelectKBest(f_classif, k=n_select)),
-                            ("clf", model),
-                        ])
-                        pipe.fit(X_train, y_train)
-                        X_test_in = X_test
-
-                    preds = pipe.predict(X_test_in)
-
-                    fold_metrics["bal_acc"].append(
-                        balanced_accuracy_score(y_test, preds))
-                    fold_metrics["f1"].append(
-                        f1_score(y_test, preds, zero_division=0))
-                    fold_metrics["sens"].append(
-                        recall_score(y_test, preds, pos_label=1, zero_division=0))
-                    fold_metrics["spec"].append(
-                        recall_score(y_test, preds, pos_label=0, zero_division=0))
+                    fold_metrics["bal_acc"].append(balanced_accuracy_score(y_te, preds))
+                    fold_metrics["f1"].append(f1_score(y_te, preds, zero_division=0))
+                    fold_metrics["sens"].append(recall_score(y_te, preds, pos_label=1, zero_division=0))
+                    fold_metrics["spec"].append(recall_score(y_te, preds, pos_label=0, zero_division=0))
                     try:
-                        if len(np.unique(y_test)) < 2:
-                            raise ValueError("single class in fold")
                         if hasattr(pipe, "predict_proba"):
-                            probs = pipe.predict_proba(X_test_in)[:, 1]
+                            probs = pipe.predict_proba(X_te)[:, 1]
                         else:
-                            probs = pipe.decision_function(X_test_in)
-                        probs = np.nan_to_num(np.array(probs, dtype=float), nan=0.5)
-                        fold_metrics["auc"].append(roc_auc_score(y_test, probs))
+                            probs = pipe.decision_function(X_te)
+                        fold_metrics["auc"].append(roc_auc_score(y_te, probs))
                     except Exception:
                         fold_metrics["auc"].append(np.nan)
 
-                # Bootstrap 95% CI for balanced accuracy
-                ba_scores = np.array(fold_metrics["bal_acc"])
-                n_boot = 1000
-                rng = np.random.RandomState(random_state)
-                boot_means = [
-                    np.mean(rng.choice(ba_scores, size=len(ba_scores), replace=True))
-                    for _ in range(n_boot)
-                ]
-                ci_lower = np.percentile(boot_means, 2.5)
-                ci_upper = np.percentile(boot_means, 97.5)
-
-                result = {
-                    "feature_set": fs_name,
-                    "n_features_input": len(fs_cols_valid),
-                    "n_features_selected": n_select,
-                    "model": model_name,
-                    "balanced_accuracy": round(np.mean(ba_scores), 3),
-                    "bal_acc_std": round(np.std(ba_scores), 3),
-                    "ci_lower": round(ci_lower, 3),
-                    "ci_upper": round(ci_upper, 3),
-                    "f1": round(np.mean(fold_metrics["f1"]), 3),
-                    "auc": round(float(np.nanmean(fold_metrics["auc"])) if fold_metrics["auc"] else float("nan"), 3),
-                    "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
-                    "specificity": round(np.mean(fold_metrics["spec"]), 3),
-                }
-                results.append(result)
-
-                logger.info(f"{fs_name} | {model_name} | BA={result['balanced_accuracy']:.3f}")
-                print(
-                    f"  {fs_name:30s} | {model_name:12s} | "
-                    f"Acc: {result['balanced_accuracy']:.3f} "
-                    f"[{ci_lower:.3f}-{ci_upper:.3f}] | "
-                    f"Sens: {result['sensitivity']:.3f} | "
-                    f"Spec: {result['specificity']:.3f} | "
-                    f"F1: {result['f1']:.3f} | AUC: {result['auc']:.3f}"
-                )
-
+                rows.append({
+                    "feature_set":       fs_name,
+                    "model":             model_name,
+                    "balanced_accuracy": round(float(np.mean(fold_metrics["bal_acc"])), 3),
+                    "f1":                round(float(np.mean(fold_metrics["f1"])), 3),
+                    "auc":               round(float(np.nanmean(fold_metrics["auc"])), 3),
+                    "sensitivity":       round(float(np.mean(fold_metrics["sens"])), 3),
+                    "specificity":       round(float(np.mean(fold_metrics["spec"])), 3),
+                })
+                print(f"  [legacy] {fs_name:30s} | {model_name:12s} | "
+                      f"BA={rows[-1]['balanced_accuracy']:.3f}")
             except Exception as e:
-                logger.error(f"{fs_name} | {model_name} | {e}")
-                print(f"  {fs_name} | {model_name} | ERROR: {e}")
-            finally:
-                gc.collect()  # Free memory between model runs
-
-    # CNN-LSTM (PyTorch-based, separate CV loop)
-    # Enable by adding "CNN-LSTM" to ml.models in config.yaml.
-    # Env var RUN_CNN_LSTM=1 also works as an override.
-    import os as _os
-    cnn_lstm_in_config = "CNN-LSTM" in enabled_models
-    cnn_lstm_env = _os.environ.get("RUN_CNN_LSTM", "0") == "1"
-    if cnn_lstm_in_config or cnn_lstm_env:
-        try:
-            cnn_lstm_results = _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config)
-            results.extend(cnn_lstm_results)
-        except Exception as e:
-            print(f"  [INFO] CNN-LSTM failed: {e}")
-    else:
-        print("  [INFO] CNN-LSTM skipped (add 'CNN-LSTM' to ml.models in config.yaml to enable)")
-
-    # Permutation test on best model to verify above-chance performance
-    # Uses global median split (required by sklearn: fixed y for permutation)
-    best_info = {}
-    if results:
-        results_df = pd.DataFrame(results)
-        best_row = results_df.loc[results_df["balanced_accuracy"].idxmax()]
-        best_fs = best_row["feature_set"]
-        best_model_name = best_row["model"]
-        best_info = {"feature_set": best_fs, "model": best_model_name}
-
-        print(f"\n  Permutation test on best model ({best_model_name}, {best_fs})...")
-        fs_cols_best = [c for c in feature_sets[best_fs] if c in df.columns]
-        X_perm = df.loc[valid_idx, fs_cols_best]
-        n_sel_perm = max(5, min(15, len(fs_cols_best) // 10))
-        n_sel_perm = min(n_sel_perm, len(fs_cols_best))
-
-        best_model = _build_models(random_state)[best_model_name]
-        pipe_perm = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("select", SelectKBest(f_classif, k=n_sel_perm)),
-            ("clf", best_model),
-        ])
-
-        cv_perm = RepeatedStratifiedKFold(
-            n_splits=cv_folds, n_repeats=3, random_state=random_state
-        )
-        try:
-            # n_jobs=1 to prevent OOM on macOS (18GB RAM).
-            # n_jobs=-1 spawns parallel workers that each clone the full
-            # dataset — causes OOM kill with 941 features x 8 models.
-            score_real, perm_scores, perm_pvalue = permutation_test_score(
-                pipe_perm, X_perm, y_global,
-                scoring="balanced_accuracy", cv=cv_perm,
-                n_permutations=200, random_state=random_state,
-                n_jobs=1,
-            )
-            print(f"    Real score: {score_real:.3f}")
-            print(f"    Permutation mean: {np.mean(perm_scores):.3f}")
-            print(f"    p-value: {perm_pvalue:.4f}")
-            print(f"    Above chance: {'YES' if perm_pvalue < 0.05 else 'NO'}")
-            logger.info(f"Permutation test: p={perm_pvalue:.4f}")
-
-            for r in results:
-                if r["feature_set"] == best_fs and r["model"] == best_model_name:
-                    r["perm_p_value"] = round(perm_pvalue, 4)
-                    r["perm_mean"] = round(np.mean(perm_scores), 3)
-        except Exception as e:
-            print(f"    Permutation test failed: {e}")
-            logger.error(f"Permutation test failed: {e}")
-
-        # Hyperparameter tuning on best feature set (proposal Section 3.5.2)
-        print(f"\n  Running hyperparameter tuning on best feature set: {best_fs}")
-        tuned = _run_tuned_classification(df, valid_idx, feature_sets[best_fs], y_global, config)
-        results.extend(tuned)
-
-    return pd.DataFrame(results), best_info
-
-
-def _run_tuned_classification(df, valid_idx, fs_cols, y, config):
-    """
-    Hyperparameter tuning using RandomizedSearchCV (proposal Section 3.5.2).
-    Uses nested CV: inner loop for tuning, outer loop for evaluation.
-    """
-    from sklearn.model_selection import RepeatedStratifiedKFold, \
-        RandomizedSearchCV, cross_val_predict
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.impute import SimpleImputer
-    from sklearn.feature_selection import SelectKBest, f_classif
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.svm import SVC
-    from sklearn.metrics import balanced_accuracy_score, f1_score, \
-        roc_auc_score, recall_score
-    from scipy.stats import randint, uniform
-
-    random_state = config["random_state"]
-    fs_cols_valid = [c for c in fs_cols if c in df.columns]
-    X = df.loc[valid_idx, fs_cols_valid]  # no fillna — imputer handles NaN
-    n_select = max(5, min(15, len(fs_cols_valid) // 10))
-    n_select = min(n_select, len(fs_cols_valid))
-
-    param_grids = {
-        "RandomForest": {
-            "clf__n_estimators": randint(50, 300),
-            "clf__max_depth": randint(2, 6),
-            "clf__min_samples_leaf": randint(2, 8),
-        },
-        "SVM": {
-            "clf__C": uniform(0.01, 10),
-            "clf__gamma": ["scale", "auto"],
-        },
-    }
-
-    # XGBoost
-    try:
-        from xgboost import XGBClassifier
-        param_grids["XGBoost"] = {
-            "clf__n_estimators": randint(30, 200),
-            "clf__max_depth": randint(2, 5),
-            "clf__learning_rate": uniform(0.01, 0.3),
-        }
-    except ImportError:
-        pass
-
-    results = []
-    inner_cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=1, random_state=random_state)
-    outer_cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=5, random_state=random_state)
-
-    base_models = _build_models(random_state)
-
-    for model_name, param_dist in param_grids.items():
-        if model_name not in base_models:
-            continue
-
-        pipe = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("select", SelectKBest(f_classif, k=n_select)),
-            ("clf", base_models[model_name]),
-        ])
-
-        search = RandomizedSearchCV(
-            pipe, param_dist, n_iter=20, cv=inner_cv,
-            scoring="balanced_accuracy", random_state=random_state,
-            n_jobs=1, refit=True,  # n_jobs=1 to prevent OOM on macOS
-        )
-
-        # Nested CV evaluation
-        fold_metrics = {"bal_acc": [], "f1": [], "auc": [], "sens": [], "spec": []}
-        for train_idx, test_idx in outer_cv.split(X, y):
-            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-            search.fit(X_train, y_train)
-            preds = search.predict(X_test)
-
-            fold_metrics["bal_acc"].append(balanced_accuracy_score(y_test, preds))
-            fold_metrics["f1"].append(f1_score(y_test, preds, zero_division=0))
-            fold_metrics["sens"].append(recall_score(y_test, preds, pos_label=1, zero_division=0))
-            fold_metrics["spec"].append(recall_score(y_test, preds, pos_label=0, zero_division=0))
-            try:
-                if hasattr(search, "predict_proba"):
-                    probs = search.predict_proba(X_test)[:, 1]
-                else:
-                    probs = search.decision_function(X_test)
-                fold_metrics["auc"].append(roc_auc_score(y_test, probs))
-            except Exception:
-                fold_metrics["auc"].append(0.5)
-
-        result = {
-            "feature_set": "tuned_best",
-            "n_features_input": len(fs_cols_valid),
-            "n_features_selected": n_select,
-            "model": f"{model_name}_tuned",
-            "balanced_accuracy": round(np.mean(fold_metrics["bal_acc"]), 3),
-            "bal_acc_std": round(np.std(fold_metrics["bal_acc"]), 3),
-            "f1": round(np.mean(fold_metrics["f1"]), 3),
-            "auc": round(float(np.nanmean(fold_metrics["auc"])) if fold_metrics["auc"] else float("nan"), 3),
-            "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
-            "specificity": round(np.mean(fold_metrics["spec"]), 3),
-        }
-        results.append(result)
-
-        print(
-            f"  {'tuned_best':30s} | {model_name+'_tuned':12s} | "
-            f"Acc: {result['balanced_accuracy']:.3f} "
-            f"(+/-{result['bal_acc_std']:.3f}) | "
-            f"Sens: {result['sensitivity']:.3f} | "
-            f"Spec: {result['specificity']:.3f} | "
-            f"F1: {result['f1']:.3f} | AUC: {result['auc']:.3f}"
-        )
-
-    return results
-
-
-def _run_cnn_lstm_cv(df, valid_idx, feature_sets, y, config):
-    """
-    CNN-LSTM classifier using PyTorch (proposal Section 2.4.2).
-    Runs manual stratified k-fold CV since PyTorch models
-    don't integrate with sklearn cross_validate.
-    """
-    try:
-        import torch
-        import torch.nn as nn
-        from sklearn.model_selection import RepeatedStratifiedKFold
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.feature_selection import SelectKBest, f_classif
-        from sklearn.metrics import balanced_accuracy_score, f1_score, \
-            roc_auc_score, recall_score
-    except ImportError:
-        print("  [INFO] PyTorch not installed — skipping CNN-LSTM")
-        return []
-
-    class CNNLSTM(nn.Module):
-        def __init__(self, n_features):
-            super().__init__()
-            self.conv1 = nn.Conv1d(1, 16, kernel_size=3, padding=1)
-            self.relu = nn.ReLU()
-            self.lstm = nn.LSTM(16, 32, batch_first=True)
-            self.fc = nn.Linear(32, 1)
-
-        def forward(self, x):
-            # x: (batch, n_features) -> (batch, 1, n_features)
-            x = x.unsqueeze(1)
-            x = self.relu(self.conv1(x))       # (batch, 16, n_features)
-            x = x.permute(0, 2, 1)             # (batch, n_features, 16)
-            _, (h_n, _) = self.lstm(x)          # h_n: (1, batch, 32)
-            out = self.fc(h_n.squeeze(0))       # (batch, 1)
-            return out.squeeze(-1)
-
-    ana = config["analysis"]
-    random_state = config["random_state"]
-    cv_folds = ana["cv_folds"]
-    cv_repeats = ana["cv_repeats"]
-    cv = RepeatedStratifiedKFold(
-        n_splits=cv_folds, n_repeats=cv_repeats, random_state=random_state
-    )
-
-    results = []
-
-    for fs_name, fs_cols in feature_sets.items():
-        fs_cols_valid = [c for c in fs_cols if c in df.columns]
-        if not fs_cols_valid:
-            continue
-
-        X_full = df.loc[valid_idx, fs_cols_valid].fillna(0).values
-        y_np = y.values
-
-        n_select = min(10, len(fs_cols_valid))
-        fold_metrics = {"bal_acc": [], "f1": [], "auc": [], "sens": [], "spec": []}
-
-        for train_idx, test_idx in cv.split(X_full, y_np):
-            X_train, X_test = X_full[train_idx], X_full[test_idx]
-            y_train, y_test = y_np[train_idx], y_np[test_idx]
-
-            # Feature selection + scaling
-            sel = SelectKBest(f_classif, k=n_select).fit(X_train, y_train)
-            X_train = sel.transform(X_train)
-            X_test = sel.transform(X_test)
-            scaler = StandardScaler().fit(X_train)
-            X_train = scaler.transform(X_train)
-            X_test = scaler.transform(X_test)
-
-            # Train
-            torch.manual_seed(random_state)
-            model = CNNLSTM(n_select)
-            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-            criterion = nn.BCEWithLogitsLoss()
-
-            X_t = torch.FloatTensor(X_train)
-            y_t = torch.FloatTensor(y_train)
-
-            model.train()
-            for epoch in range(100):
-                optimizer.zero_grad()
-                loss = criterion(model(X_t), y_t)
-                loss.backward()
-                optimizer.step()
-
-            # Predict
-            model.eval()
-            with torch.no_grad():
-                logits = model(torch.FloatTensor(X_test))
-                probs = torch.sigmoid(logits).numpy()
-                preds = (probs >= 0.5).astype(int)
-
-            fold_metrics["bal_acc"].append(balanced_accuracy_score(y_test, preds))
-            fold_metrics["f1"].append(f1_score(y_test, preds, zero_division=0))
-            fold_metrics["sens"].append(recall_score(y_test, preds, pos_label=1, zero_division=0))
-            fold_metrics["spec"].append(recall_score(y_test, preds, pos_label=0, zero_division=0))
-            try:
-                fold_metrics["auc"].append(roc_auc_score(y_test, probs))
-            except ValueError:
-                fold_metrics["auc"].append(0.5)
-
-        result = {
-            "feature_set": fs_name,
-            "n_features_input": len(fs_cols_valid),
-            "n_features_selected": n_select,
-            "model": "CNN-LSTM",
-            "balanced_accuracy": round(np.mean(fold_metrics["bal_acc"]), 3),
-            "bal_acc_std": round(np.std(fold_metrics["bal_acc"]), 3),
-            "f1": round(np.mean(fold_metrics["f1"]), 3),
-            "auc": round(float(np.nanmean(fold_metrics["auc"])) if fold_metrics["auc"] else float("nan"), 3),
-            "sensitivity": round(np.mean(fold_metrics["sens"]), 3),
-            "specificity": round(np.mean(fold_metrics["spec"]), 3),
-        }
-        results.append(result)
-
-        print(
-            f"  {fs_name:30s} | {'CNN-LSTM':12s} | "
-            f"Acc: {result['balanced_accuracy']:.3f} "
-            f"(+/-{result['bal_acc_std']:.3f}) | "
-            f"Sens: {result['sensitivity']:.3f} | "
-            f"Spec: {result['specificity']:.3f} | "
-            f"F1: {result['f1']:.3f} | AUC: {result['auc']:.3f}"
-        )
-
-    return results
-
-
-# ──────────────────────────────────────────────────────────────────
-# 4C. SHAP Analysis
-# ──────────────────────────────────────────────────────────────────
-
-def run_shap_analysis(df, config, best_info=None, target=None, output_dir=None):
-    """
-    SHAP analysis on the best-performing model/feature-set combination
-    to identify candidate biomarker features.
-
-    Args:
-        best_info: dict with 'feature_set' and 'model' from classification
-        target: continuous column for binary labels. Falls back to first
-                configured target.
-        output_dir: directory for SHAP outputs (figures + annotated csv).
-                Falls back to config.paths.analysis_dir.
-    """
-    print("\n" + "-" * 40)
-    print("4C. SHAP Feature Importance")
-    print("-" * 40)
-
-    try:
-        import shap
-    except ImportError:
-        print("  SHAP not installed. pip install shap")
-        return None
-
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.impute import SimpleImputer
-    from sklearn.feature_selection import SelectKBest, f_classif
-
-    # Use best feature set from classification, or fall back to conventional
-    best_feature_set = (best_info or {}).get("feature_set", "conventional_qeeg")
-
-    if target is None:
-        from utils.io import get_targets
-        target = get_targets(config)[0]
-    continuous_col = target
-    if continuous_col not in df.columns or df[continuous_col].isna().all():
-        print(f"  SKIP: Target '{continuous_col}' not found or all-NaN.")
-        return None
-    y_cont = df[continuous_col].dropna()
-    y = (y_cont > y_cont.median()).astype(int)
-    valid_idx = y.index
-    print(f"  Target variable: {continuous_col}")
-
-    feature_sets = get_feature_sets(df, config)
-    fs_cols = feature_sets.get(best_feature_set, [])
-    fs_cols = [c for c in fs_cols if c in df.columns]
-
-    print(f"  Using feature set: {best_feature_set} ({len(fs_cols)} features)")
-
-    if not fs_cols:
-        print("  No features found for SHAP analysis")
-        return None
-
-    X = df.loc[valid_idx, fs_cols].fillna(0)
-
-    # CV-stable feature selection: run SelectKBest inside CV folds,
-    # keep features selected in >= 3/5 folds. Avoids data leakage
-    # from fitting selector on full dataset.
-    n_select = min(10, len(fs_cols))
-    from sklearn.model_selection import StratifiedKFold
-
-    cv_inner = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    feature_votes = np.zeros(len(fs_cols))
-    for train_idx, _ in cv_inner.split(X, y):
-        sel = SelectKBest(f_classif, k=n_select)
-        sel.fit(X.iloc[train_idx], y.iloc[train_idx])
-        feature_votes[sel.get_support()] += 1
-
-    stable_mask = feature_votes >= 3
-    if stable_mask.sum() == 0:
-        stable_mask = feature_votes >= 2  # fallback if too strict
-    selected_names = [fs_cols[i] for i, m in enumerate(stable_mask) if m]
-    X_selected = X[selected_names].values
-
-    # Compute SHAP values per CV fold and average — avoids overfitting
-    # SHAP importance on a model trained on all 28 subjects is misleading.
-    from sklearn.model_selection import StratifiedKFold as _SKF
-
-    random_state_shap = config["random_state"]
-    cv_shap = _SKF(n_splits=5, shuffle=True, random_state=random_state_shap)
-
-    all_shap_values = []
-    feature_selection_counts = np.zeros(len(selected_names))
-
-    for fold_idx, (train_idx, test_idx) in enumerate(cv_shap.split(X_selected, y)):
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_selected[train_idx])
-        X_test_s = scaler.transform(X_selected[test_idx])
-
-        model = RandomForestClassifier(
-            n_estimators=100, max_depth=3,
-            class_weight="balanced",
-            random_state=random_state_shap,
-        )
-        model.fit(X_train_s, y.iloc[train_idx])
-
-        explainer = shap.TreeExplainer(model)
-        shap_fold = explainer.shap_values(X_test_s)
-
-        if isinstance(shap_fold, list):
-            shap_fold = shap_fold[1]
-        if shap_fold.ndim == 3:
-            shap_fold = shap_fold[:, :, 1]
-
-        all_shap_values.append(np.mean(np.abs(shap_fold), axis=0).ravel())
-
-    # Average SHAP importance across folds
-    mean_abs_shap = np.mean(all_shap_values, axis=0)
-    shap_std = np.std(all_shap_values, axis=0)
-
-    # Also compute SHAP on full data for the summary plot only
-    scaler_full = StandardScaler()
-    X_scaled = scaler_full.fit_transform(X_selected)
-    model_full = RandomForestClassifier(
-        n_estimators=100, max_depth=3,
-        class_weight="balanced",
-        random_state=random_state_shap,
-    )
-    model_full.fit(X_scaled, y)
-    explainer_full = shap.TreeExplainer(model_full)
-    shap_values = explainer_full.shap_values(X_scaled)
-    if isinstance(shap_values, list):
-        shap_values = shap_values[1]
-    if shap_values.ndim == 3:
-        shap_values = shap_values[:, :, 1]
-    importance = pd.DataFrame({
-        "feature": selected_names,
-        "mean_abs_shap": mean_abs_shap,
-        "shap_std_across_folds": shap_std,
-        "shap_cv": shap_std / (mean_abs_shap + 1e-10),  # coefficient of variation
-    }).sort_values("mean_abs_shap", ascending=False)
-
-    print("\n  Top biomarker candidates (by SHAP importance, CV-averaged):")
-    for _, row in importance.head(10).iterrows():
-        stability = "stable" if row["shap_cv"] < 0.5 else "unstable"
-        print(f"    {row['feature']:40s}  SHAP: {row['mean_abs_shap']:.4f} "
-              f"(+/-{row['shap_std_across_folds']:.4f}, {stability})")
-
-    # Biological interpretation of top biomarkers
-    try:
-        from utils.bio_interpretation import print_biomarker_report
-        print_biomarker_report(importance, top_n=10)
-    except Exception as e:
-        logger.warning(f"Biological interpretation skipped: {e}")
-
-    # Save SHAP summary plot
-    out_dir = output_dir or config["output_dir"]
-    figures_dir = os.path.join(out_dir, "figures")
-    os.makedirs(figures_dir, exist_ok=True)
-
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        shap.summary_plot(
-            shap_values, X_scaled,
-            feature_names=selected_names,
-            show=False,
-        )
-        plt.tight_layout()
-        plt.savefig(
-            os.path.join(figures_dir, "shap_summary.png"),
-            dpi=150, bbox_inches="tight"
-        )
-        plt.close()
-        print(f"\n  SHAP summary plot saved: {figures_dir}/shap_summary.png")
-    except Exception as e:
-        print(f"  Could not save SHAP plot: {e}")
-
-    # Save annotated importance with biological interpretation
-    try:
-        from utils.bio_interpretation import interpret_biomarkers
-        annotated = interpret_biomarkers(importance)
-        annotated.to_csv(
-            os.path.join(out_dir, "shap_annotated.csv"),
-            index=False,
-        )
-        logger.info("Annotated SHAP importance saved")
-    except Exception:
-        pass
-
-    return importance
+                print(f"  [legacy] {fs_name} | {model_name} | ERROR: {e}")
+
+    df_out = pd.DataFrame(rows)
+    if not df_out.empty:
+        df_out.to_csv(os.path.join(output_dir, "legacy_ml_results.csv"),
+                      index=False)
+    return df_out
 
 
 # ──────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────
 
+def _resolve_target_list(target_cfg):
+    """
+    Return a list of target dicts {name, task, residualize_covariates,
+    clinical_threshold} from the new or legacy config layouts.
+
+    Accepted layouts (in priority order):
+      1. target.names: [a, b, c]      (recommended)
+      2. target.primary.name + target.additional_targets: [...]
+      3. target.primary.name only      (single-target legacy)
+    """
+    task = target_cfg.get("task")
+    cov  = target_cfg.get("residualize_covariates")
+    thr  = target_cfg.get("clinical_threshold", {}) or {}
+
+    primary = target_cfg.get("primary", {}) or {}
+    if task is None:
+        task = primary.get("task", "regression")
+    if cov is None:
+        cov = primary.get("residualize_covariates") or ["age_months"]
+
+    names = target_cfg.get("names")
+    if names is None:
+        names = []
+        if primary.get("name"):
+            names.append(primary["name"])
+        names.extend(target_cfg.get("additional_targets") or [])
+    # Dedupe in declared order; strip inline comments.
+    seen, ordered = set(), []
+    for n in names:
+        n = str(n).split("#")[0].strip()
+        if n and n not in seen:
+            seen.add(n)
+            ordered.append(n)
+
+    return [
+        {
+            "name": n,
+            "task": task,
+            "residualize_covariates": list(cov),
+            "clinical_threshold": thr,
+        }
+        for n in ordered
+    ]
+
+
+def _build_target_cfg(target_spec):
+    """Shape a single-target dict back into the legacy layout that
+    run_target_preparation expects."""
+    return {
+        "primary": {
+            "name": target_spec["name"],
+            "task": target_spec["task"],
+            "residualize_covariates": target_spec["residualize_covariates"],
+        },
+        "clinical_threshold": target_spec["clinical_threshold"] or {},
+    }
+
+
+def _run_one_target(target_spec, full_df, X_curated_full, feature_sets_curated,
+                    config, target_dir):
+    """
+    Per-target pipeline: target preparation -> regression -> screening ->
+    permutation -> bootstrap -> FDR -> SHAP. Writes everything under
+    ``target_dir`` (which may equal the run base dir for single-target).
+    Returns a dict summarising results for the run_notes audit.
+    """
+    name = target_spec["name"]
+    task = target_spec["task"]
+
+    print("\n" + "#" * 60)
+    print(f"# TARGET: {name}")
+    print("#" * 60)
+
+    if name not in full_df.columns or full_df[name].isna().all():
+        print(f"  SKIP: '{name}' missing or all-NaN in full_dataset.csv")
+        return {"target": name, "status": "skipped"}
+
+    os.makedirs(target_dir, exist_ok=True)
+
+    # Target preparation
+    target_prep = run_target_preparation(
+        full_df, _build_target_cfg(target_spec), output_dir=target_dir,
+    )
+    y_residual = target_prep["y_residual"]
+    _save_target_distribution_plot(
+        target_prep["y_continuous_raw"], y_residual,
+        target_prep["threshold"], target_dir, target_prep["target_name"],
+    )
+
+    # 4C. Regression
+    if task != "regression":
+        print(f"  [INFO] target.task={task!r}; skipping regression path.")
+        return {"target": name, "status": "skipped_task", "task": task}
+
+    print("\n" + "-" * 40)
+    print(f"4C. Regression CV — {name}")
+    print("-" * 40)
+    regression_results, best_info, oof_predictions = run_regression(
+        X_curated_full, y_residual, feature_sets_curated, config, target_dir,
+    )
+
+    # 4C-2. Clinical screening
+    screening_df = pd.DataFrame()
+    if oof_predictions:
+        print("\n" + "-" * 40)
+        print(f"4C-2. Clinical screening — {name}")
+        print("-" * 40)
+        screening_df = run_clinical_screening(oof_predictions, target_prep, target_dir)
+
+    # 4D. Validation
+    perm, bootstrap = {}, {}
+    if oof_predictions:
+        perm = run_permutation_test(
+            X_curated_full, y_residual, feature_sets_curated,
+            regression_results, config, target_dir,
+        )
+        bootstrap = run_bootstrap_ci(oof_predictions, screening_df,
+                                     target_prep, config, target_dir)
+        apply_fdr_to_pearson(regression_results, target_dir)
+
+    # 4F. SHAP
+    importance = None
+    if best_info:
+        importance = run_shap_regression(
+            X_curated_full, y_residual, best_info, config, target_dir,
+        )
+
+    return {
+        "target":           name,
+        "status":           "ok",
+        "task":             task,
+        "n_used":           int(target_prep["report"]["residual_stats"]["n"]),
+        "covariate_r2":     target_prep["report"]["age_model_r2"],
+        "threshold":        target_prep["report"]["primary_threshold"]["threshold"],
+        "prevalence":       target_prep["report"]["primary_threshold"]["prevalence"],
+        "best_regressor":   best_info,
+        "permutation_p":    (perm or {}).get("p_value"),
+        "shap_top_feature": (importance.iloc[0]["feature"]
+                              if importance is not None and len(importance) else None),
+    }
+
+
 def run(config, full_df=None):
     """
-    Run full Stage 4 analysis. Loops 4B (classification) and 4C (SHAP)
-    over every target listed in ``config['analysis']['targets']``.
-    Descriptives and correlations are target-agnostic and run once.
+    Run regression-first Stage 4 over one or more targets. Writes:
 
-    Writes correlations.csv at ``config['output_dir']``, plus per-target
-    ml_results.csv, shap_importance.csv, shap_annotated.csv, and figures/
-    subdir. Auto-loads full_dataset.csv from ``config['input_dir']``
-    (latest engineering run) when ``full_df`` is None.
+    Run-level (target-agnostic):
+      - correlations.csv
+      - feature_curation_report.json
+      - feature_correlation_heatmap_before.png / _after.png
+
+    Per-target (under <target>/ when N>1, flat when N=1):
+      - target_preparation_report.json, target_distribution.png
+      - regression_results.csv, regression_summary.csv
+      - clinical_screening_metrics.csv
+      - permutation_results.json, bootstrap_ci.json
+      - shap_importance.csv, shap_annotated.csv (when SHAP available)
+      - figures/shap_summary.png
+
+    Optional:
+      - legacy_ml_results.csv (when legacy_classification.enable=true)
     """
-    from utils.io import get_targets, write_stage_notes
+    from utils.io import write_stage_notes
     from stages.engineering import load_full_dataset
 
     print("\n" + "=" * 60)
-    print("STAGE 4: Analysis")
+    print("STAGE 4: Analysis (regression-first)")
     print("=" * 60)
 
     engineering_input = config.get("input_dir")
@@ -1081,85 +1403,97 @@ def run(config, full_df=None):
             )
         full_df = load_full_dataset(config, stage_dir=engineering_input)
 
-    # 4A: Descriptives + Correlations (target-agnostic)
+    # 4A. Run-level descriptives + hypothesis correlations.
     desc = run_descriptives(full_df, config)
     corr_results = run_correlations(full_df, config)
 
     base_dir = config["output_dir"]
     print(f"  Analysis output dir: {base_dir}")
-
     if not corr_results.empty:
-        corr_results.to_csv(
-            os.path.join(base_dir, "correlations.csv"), index=False
-        )
+        corr_results.to_csv(os.path.join(base_dir, "correlations.csv"), index=False)
 
-    targets = get_targets(config)
+    ana = config["analysis"]
+    target_cfg = ana.get("target", {}) or {}
+    fc_cfg = ana.get("feature_curation", {}) or {}
+
+    targets = _resolve_target_list(target_cfg)
+    if not targets:
+        raise ValueError(
+            "No targets configured. Set analysis.target.names: [...] "
+            "or analysis.target.primary.name in stages/analysis/config.yaml"
+        )
+    print(f"  Targets to analyse ({len(targets)}): {[t['name'] for t in targets]}")
+
+    # 4B. Build feature pool -> curate (run once, target-agnostic).
+    feature_sets_all = get_feature_sets(full_df, config)
+    feature_pool_cols = sorted({c for cols in feature_sets_all.values() for c in cols
+                                if c in full_df.columns})
+    if not feature_pool_cols:
+        raise RuntimeError("No features found across requested feature_sets")
+
+    X_pool_raw = full_df[feature_pool_cols].apply(pd.to_numeric, errors="coerce")
+    if fc_cfg.get("enable", True):
+        X_curated, kept_names, _ = run_feature_curation(
+            X_pool_raw, fc_cfg, output_dir=base_dir,
+        )
+    else:
+        X_curated = X_pool_raw
+        kept_names = feature_pool_cols
+        print("  [INFO] feature_curation.enable=false — skipping curation")
+
+    kept_set = set(kept_names)
+    feature_sets_curated = {}
+    for fs_name, fs_cols in feature_sets_all.items():
+        retained = [c for c in fs_cols if c in kept_set]
+        if retained:
+            feature_sets_curated[fs_name] = retained
+    if not feature_sets_curated:
+        raise RuntimeError("No feature sets have any surviving columns after curation")
+
+    try:
+        _save_correlation_heatmaps(X_pool_raw, X_curated, base_dir)
+    except Exception as e:
+        print(f"  [WARN] Correlation heatmaps skipped: {e}")
+
+    X_curated_full = full_df[kept_names].apply(pd.to_numeric, errors="coerce")
+
+    # Per-target loop. Single-target writes to base_dir for backwards-compat;
+    # multi-target writes to base_dir/<target>/.
     multi = len(targets) > 1
-    print(f"\n  Targets to analyse: {targets}")
+    per_target = []
+    for tgt in targets:
+        tgt_dir = os.path.join(base_dir, tgt["name"]) if multi else base_dir
+        per_target.append(_run_one_target(
+            tgt, full_df, X_curated_full, feature_sets_curated, config, tgt_dir,
+        ))
 
-    per_target = {}
-    for target in targets:
-        print("\n" + "#" * 60)
-        print(f"# TARGET: {target}")
-        print("#" * 60)
-
-        # Per-target output directory (subdir only when >1 target — preserves
-        # the legacy single-target layout)
-        target_dir = os.path.join(base_dir, target) if multi else base_dir
-        os.makedirs(target_dir, exist_ok=True)
-
-        if target not in full_df.columns or full_df[target].isna().all():
-            print(f"  SKIP: '{target}' missing or all-NaN in full_dataset.")
-            per_target[target] = {"ml_results": pd.DataFrame(), "shap_importance": None}
-            continue
-
-        # 4B: ML classification
-        ml_results, best_info = run_classification(full_df, config, target=target)
-
-        # 4C: SHAP on best-performing model/feature-set
-        shap_importance = run_shap_analysis(
-            full_df, config, best_info=best_info,
-            target=target, output_dir=target_dir,
+    # 4-LEGACY (optional, primary target only).
+    legacy_results = pd.DataFrame()
+    if (ana.get("legacy_classification") or {}).get("enable", False):
+        legacy_target = targets[0]["name"]
+        legacy_results = run_legacy_classification(
+            full_df, config, legacy_target, base_dir,
         )
-
-        if not ml_results.empty:
-            ml_results.to_csv(
-                os.path.join(target_dir, "ml_results.csv"), index=False
-            )
-            best = ml_results.loc[ml_results["balanced_accuracy"].idxmax()]
-            print(f"\n  BEST MODEL ({target}):")
-            print(f"    Feature set: {best['feature_set']}")
-            print(f"    Model: {best['model']}")
-            print(f"    Balanced accuracy: {best['balanced_accuracy']:.3f}")
-            print(f"    H4 target (>=0.75): {'MET' if best['balanced_accuracy'] >= 0.75 else 'NOT MET'}")
-
-        if shap_importance is not None:
-            shap_importance.to_csv(
-                os.path.join(target_dir, "shap_importance.csv"), index=False
-            )
-
-        per_target[target] = {
-            "ml_results": ml_results,
-            "shap_importance": shap_importance,
-            "best_info": best_info,
-            "output_dir": target_dir,
-        }
 
     write_stage_notes(base_dir, {
         "stage": "analysis",
         "input_engineering_dir": engineering_input,
-        "targets": targets,
         "n_subjects": int(full_df.shape[0]),
-        "outputs": (
-            ["correlations.csv"]
-            + [f"{t}/ml_results.csv" if multi else "ml_results.csv" for t in targets]
-            + [f"{t}/shap_importance.csv" if multi else "shap_importance.csv" for t in targets]
-        ),
+        "n_features_input": int(len(feature_pool_cols)),
+        "n_features_curated": int(len(kept_names)),
+        "targets":     [t["name"] for t in targets],
+        "per_target":  per_target,
+        "outputs": [
+            "correlations.csv", "feature_curation_report.json",
+            "feature_correlation_heatmap_before.png",
+            "feature_correlation_heatmap_after.png",
+        ] + (["legacy_ml_results.csv"] if not legacy_results.empty else []),
     })
 
     return {
-        "descriptives": desc,
-        "correlations": corr_results,
-        "targets": targets,
-        "per_target": per_target,
+        "descriptives":   desc,
+        "correlations":   corr_results,
+        "targets":        [t["name"] for t in targets],
+        "per_target":     per_target,
+        "legacy_results": legacy_results,
     }

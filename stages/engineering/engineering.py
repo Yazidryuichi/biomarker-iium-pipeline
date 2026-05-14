@@ -156,13 +156,21 @@ def merge_behavioral(features_df, config):
 
     assessment_date = config["engineering"].get("assessment_date", "2026-03-09")
     aufei["age_years"] = compute_age(aufei["DoB"], assessment_date=assessment_date)
+    aufei["age_months"] = (aufei["age_years"] * 12.0).round(1)
 
-    aufei_keep = ["ID", "Sex", "age_years",
+    aufei_keep = ["ID", "Sex", "age_years", "age_months",
                   "WM_score", "IC_score", "CF_score", "P_score", "SF_score", "Global_EF"]
     behavioral = aufei[[c for c in aufei_keep if c in aufei.columns]].copy()
 
-    flanker_cols = ["ID", "flanker_effect", "acc_overall", "rt_mean",
-                    "ddm_v", "ddm_a", "ddm_t", "ddm_delta_v"]
+    flanker_cols = [
+        "ID", "flanker_effect", "acc_overall", "acc_incongruent",
+        "rt_mean", "rt_congruent", "rt_incongruent",
+        "ddm_v", "ddm_a", "ddm_t", "ddm_delta_v",
+        # Per-condition DDM (preserved from the source file when present;
+        # used as the default regression target ddm_v_incongruent).
+        "ddm_v_congruent", "ddm_a_congruent", "ddm_t0_congruent",
+        "ddm_v_incongruent", "ddm_a_incongruent", "ddm_t0_incongruent",
+    ]
     flanker_subset = flanker[[c for c in flanker_cols if c in flanker.columns]].copy()
     behavioral = behavioral.merge(flanker_subset, on="ID", how="left")
 
@@ -193,8 +201,11 @@ def binarize_targets(df):
     """
     target_candidates = [
         "Global_EF", "WM_score", "IC_score", "CF_score", "P_score", "SF_score",
-        "flanker_effect", "acc_overall", "rt_mean",
+        "flanker_effect", "acc_overall", "acc_incongruent", "rt_mean",
+        "rt_congruent", "rt_incongruent",
         "ddm_v", "ddm_a", "ddm_t", "ddm_delta_v",
+        "ddm_v_congruent", "ddm_a_congruent", "ddm_t0_congruent",
+        "ddm_v_incongruent", "ddm_a_incongruent", "ddm_t0_incongruent",
         "FW_Span", "BW_Span", "Total_Span",
     ]
     print(f"\n  Class balances (median split):")

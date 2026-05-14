@@ -19,3 +19,4 @@ pyriemann>=0.4
 # Optional: mne-connectivity>=0.6 (for spectral_connectivity_epochs)
 # Optional: mne-bids>=0.14 (for BIDS conversion)
 # Optional: pennylane>=0.32 (for QSVM quantum kernel classifier in Stage 5)
+# Optional: pingouin>=0.5 (for scripts/reliability_analysis.py)

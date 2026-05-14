@@ -14,11 +14,15 @@ AUFEI-O/
 Digital_Consent/
 Ethic_Approval_Docs/
 Archives/
+data/Behavioral/
+data/EDF/
 
 # Pipeline outputs (regenerable)
 # Each stage writes timestamped runs to stages/<stage>/runs/
 stages/*/runs/
+scripts/runs/
 results/
+logs/
 figures/
 !docs/figures/
 *.fif
@@ -51,6 +55,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.sublime-*
+.claude/
 
 # Environment
 .env
