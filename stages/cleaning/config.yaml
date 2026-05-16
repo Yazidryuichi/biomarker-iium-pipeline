@@ -14,12 +14,51 @@ params:
   notch: 50.0
   epoch_duration: 2.0       # seconds
   epoch_overlap: 0.0
-  ica_method: "fastica"
-  ica_n_components: 14      # n_channels - 1
-  # Conservative rejection (SCCN recommendation for small N)
-  max_reject_pct: 0.30      # reject max 30% of epochs
-  bad_channel_threshold: 3.0  # z-score
+
+  # --- ICA -----------------------------------------------------------------
+  # infomax + extended is what ICLabel was trained on; switching from
+  # fastica makes the ICLabel classifier scores trustworthy.
+  ica_method: "infomax"
+  ica_fit_params:
+    extended: true
+  ica_n_components: 14              # n_channels - 1 (capped further at runtime)
+
+  # ICLabel: probability cutoff + which labels to treat as artifact.
+  # Components with label ∈ exclude_labels AND prob > threshold are dropped;
+  # no hardcoded cap on the count (low-density typically yields 1–3).
+  # 0.7 catches roughly 15 extra eye-blink ICs in the pilot that sat in
+  # the 0.5–0.8 prob band; ICLabel paper recommends ≥0.7 for low density.
+  iclabel_threshold: 0.7
+  iclabel_exclude_labels:
+    - "eye blink"
+    - "muscle artifact"
+    - "heart beat"
+    - "line noise"
+    - "channel noise"
+
+  # --- Bad channel detection ----------------------------------------------
+  bad_channel_threshold: 3.5         # MAD-z on per-channel variance
+  bad_channel_corr_threshold: 0.2    # exposed from previously-hardcoded 0.3
+  bad_channel_flatline_std: 1.0e-7   # absolute std floor (V); below = flatline
+  # Channels exempted from variance-only flagging. Pediatric Fp1/Fp2 are
+  # naturally high-variance from blinks; flagging them as bad pushes
+  # them out of the ICA fit, which then hides the very blink IC that
+  # ICLabel is supposed to classify. They can still be flagged via
+  # correlation or flatline (genuine dead-channel detectors).
+  variance_protect_channels: ["Fp1", "Fp2"]
+
+  # --- Filter edge handling -----------------------------------------------
+  # 0.5 Hz HP FIR transition is several seconds; 0.5 s wasn't enough.
+  filter_edge_crop_sec: 5.0
+
+  # --- Epoch rejection -----------------------------------------------------
+  # AutoReject local interpolates a few channels per epoch instead of
+  # dropping the whole epoch. Lenient retry was removed: noisy recordings
+  # get dropped by the min_epochs floor instead of biased thresholds.
+  use_autoreject_local: true
+  fallback_reject_uv: 150            # µV, peak-to-peak, only if AutoReject errors
+  max_reject_pct: 0.30               # logged as warning only; no retry
+
+  # --- Output floor --------------------------------------------------------
   # Drop subject-condition entirely if surviving epochs < this floor.
-  # Severely degraded recordings (e.g. 29 epochs after 80% rejection) bias
-  # downstream PSD/coherence estimates; better to exclude than dilute.
   min_epochs: 60
