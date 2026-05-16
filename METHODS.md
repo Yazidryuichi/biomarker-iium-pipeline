@@ -4,10 +4,29 @@ This document provides explicit mathematical formulations for all analytical met
 
 ## 1. EEG Preprocessing (Stage 1)
 
-### 1.1 Bandpass Filter
-FIR filter with passband [0.5, 45] Hz. Hamming window, automatic filter length. Filter applied via MNE `raw.filter()`.
+### 1.1 Bandpass Filter and Edge Crop
 
-### 1.2 Bad Channel Detection
+FIR filter with passband [0.5, 45] Hz, Hamming window, automatic filter length, applied via MNE `raw.filter()`. A 50 Hz notch removes mains line noise.
+
+After filtering, `filter_edge_crop_sec` seconds are trimmed from each end of the recording to discard the FIR transition band. Default 5 s (the previous 0.5 s was too short for a 0.5 Hz HP FIR, where the transition is typically several seconds).
+
+### 1.2 Reference Scheme
+
+Source EDFs are recorded on a Mitsar amplifier with linked-mastoid (A1-A2) reference. The mastoid channels are **not** present in the EDF — Mitsar exports the 15 scalp channels with A1-A2 already subtracted.
+
+Stage 1 commits to **average reference** for the rest of the pipeline:
+
+1. After filtering and bad-channel detection, `raw.set_eeg_reference("average")` is applied (bad channels are excluded from the average automatically).
+2. ICA fit, ICLabel classification, and `ica.apply` all operate on this avg-referenced data, so the unmixing matrix W and the data it is applied to share a reference frame (an explicit MNE requirement that the previous flow violated).
+3. After bad-channel interpolation, the average reference is re-applied so the newly-restored channels contribute to the average.
+
+The `qc.json` per file records `source_reference: "A1-A2 (Mitsar implicit)"` and `output_reference: "average"` for provenance.
+
+Rationale: ICLabel (Section 1.4) was trained on average-referenced data and is unreliable on other schemes; the FAA literature (Coan & Allen, 2004) and HAPPE both use average reference; downstream spectral measures (TBR, alpha reactivity) are well-defined in this frame.
+
+### 1.3 Bad Channel Detection
+
+Three independent flags; the union is treated as bad before ICA. All thresholds are configurable in `stages/cleaning/config.yaml: params`.
 
 **Variance-based:** Modified z-score using Median Absolute Deviation (MAD):
 
@@ -15,23 +34,60 @@ FIR filter with passband [0.5, 45] Hz. Hamming window, automatic filter length. 
 z_i = 0.6745 * (var_i - median(var)) / MAD(var)
 ```
 
-Channel rejected if |z_i| > 3.0 (configurable).
+Channel rejected if `|z_i| > bad_channel_threshold` (default 3.5). Channels listed in `variance_protect_channels` (default `["Fp1", "Fp2"]`) are exempt: pediatric blinks make frontal electrodes naturally high-variance, and flagging them as bad would push them out of the ICA fit and hide exactly the blink topography ICLabel is meant to classify. They remain eligible for the two methods below if a channel is genuinely dead.
 
-**Correlation-based:** Channel rejected if max correlation with any other channel < 0.3.
+**Correlation-based:** Channel rejected if max absolute correlation with any other channel < `bad_channel_corr_threshold` (default 0.2; previously hardcoded at 0.3).
 
-### 1.3 ICA for Artifact Removal
+**Flatline:** Channel rejected if standard deviation < `bad_channel_flatline_std` (default 1.0e-7 V).
 
-FastICA with 14 components (n_channels - 1). ICA fitted on a temporary 1 Hz high-pass filtered copy to prevent slow-drift contamination (HAPPE protocol). Components applied to the original 0.5 Hz filtered data.
+QC records the three flag lists separately (`bad_by_variance`, `bad_by_correlation`, `bad_by_flatline`) so downstream review can attribute each rejection.
 
-EOG component identification via correlation with Fp1/Fp2. Maximum 3 components removed (conservative for 15-channel montage).
+### 1.4 ICA + ICLabel for Artifact Removal
 
-### 1.4 Epoch Rejection
+**Decomposition.** Infomax ICA (extended) via MNE `ICA(method="infomax", fit_params={"extended": True})`. Component count is `min(ica_n_components, n_good_channels - 1)`, floored at 4; the `-1` accounts for the rank loss from average referencing. Infomax + extended is used instead of FastICA because ICLabel (below) was trained on the infomax decomposition.
 
-AutoReject (Jas et al., 2017) computes data-driven peak-to-peak thresholds. Fallback: 150 uV. Maximum 30% epoch rejection rate enforced; if exceeded, threshold relaxed by 1.5x.
+**Fit / apply discipline.** ICA is fit on a temporary 1 Hz high-pass copy of the average-referenced raw (slow drifts < 1 Hz degrade decomposition; HAPPE recommendation). The unmixing matrix W is then applied to the 0.5 Hz bandpassed average-referenced raw. Both share a reference frame (Section 1.2).
 
-### 1.5 Subject-Condition Floor
+**Component classification.** Each fitted IC is classified by `mne-icalabel` (Pion-Tonachini et al., 2019), which assigns one of seven labels (`brain`, `muscle artifact`, `eye blink`, `heart beat`, `line noise`, `channel noise`, `other`) with a probability. The classifier was trained on a large multi-site EEG corpus (over 5000 components, expert-labeled) using a convolutional neural network on the topography map, power spectrum, and autocorrelation features of each component. Inference runs via the `onnxruntime` backend.
+
+A component is excluded if **both** of:
+
+1. Its label is in `iclabel_exclude_labels` (default: `eye blink`, `muscle artifact`, `heart beat`, `line noise`, `channel noise`)
+2. Its probability exceeds `iclabel_threshold` (default 0.7; the ICLabel paper recommends ≥0.7 for low-density montages)
+
+No hardcoded cap on the number of excluded components — ICLabel decides. The previous `find_bads_eog` + Fp1/Fp2 correlation path is removed: it was circular (Fp1/Fp2 are the very channels EOG contaminates) and unable to detect non-ocular artifacts.
+
+In the pilot (N=26 × 2 conditions = 52 recordings), this yields 46 excluded ICs, all labeled `eye blink`. Muscle / line noise / channel noise components were not detected, which is expected because the data is bandpassed to 45 Hz: muscle artifact (typically > 30 Hz) and 50 Hz line noise (also notched) lack the spectral signature ICLabel learned from 1-100 Hz data. We accept this trade-off — the dominant resting-state artifact in pediatric EEG is the eye blink, which is classified accurately.
+
+### 1.5 Epoch Rejection — AutoReject Local
+
+Continuous data is segmented into 2 s non-overlapping epochs, then passed through `autoreject.AutoReject` (local) with:
+
+- `n_interpolate = [1, 2, 3]` — max channels eligible for per-epoch interpolation
+- `consensus = [0.2, 0.3, 0.4]` — fraction of channels that must vote "bad" to drop the epoch
+- `cv = 5` — internal cross-validation for threshold selection
+
+AutoReject (Jas et al., 2017) learns a per-channel peak-to-peak threshold via cross-validation. For each epoch it then either drops the epoch (if too many channels exceed their threshold) or interpolates the small number of channels that do. QC records the per-channel threshold summary (mean, median, max in µV), the count of dropped epochs, and the mean number of channels interpolated per kept epoch.
+
+**No lenient retry.** The previous flow re-ran rejection at 1.5× the threshold when over `max_reject_pct` of epochs were dropped. This gave noisier recordings a more lenient threshold than cleaner recordings, biasing cross-subject comparisons. The retry is removed; `max_reject_pct` is now a warning-only log line, and the `min_epochs` floor (Section 1.6) is the sole gate.
+
+**Fallback.** If AutoReject fails (e.g. too few epochs for CV), a fixed peak-to-peak threshold of `fallback_reject_uv` µV (default 150) is applied. The fallback is also not retried.
+
+### 1.6 Subject-Condition Floor
 
 After per-epoch rejection, any subject-condition recording whose surviving epoch count falls below `cleaning.params.min_epochs` (default 60) is **dropped from disk** — no `*-epo.fif` is written and downstream stages never see it. Severely degraded recordings (in the pilot, one Eyes-Open recording with 29/144 epochs surviving) bias PSD and coherence estimates more than they help; excluding the affected condition while keeping the same subject's other condition is the conservative choice.
+
+### 1.7 QC Audit Trail
+
+For every input EDF, Stage 1 writes one row to `qc.json` with the fields used by analyses and the `verify_qc.py` regression checker:
+
+- Provenance: `subject`, `condition`, `filepath`, `source_reference`, `output_reference`, `duration_sec`, `duration_after_crop_sec`
+- Bad channels: `bad_channels`, `bad_by_variance`, `bad_by_correlation`, `bad_by_flatline`, `n_bad_channels`
+- ICA: `ica_excluded` (indices), `ica_labels`, `ica_probabilities` (for excluded), `ica_all_labels`, `ica_all_probabilities` (for the full decomposition), `ica_n_components_fit`
+- Rejection: `n_epochs_before_reject`, `n_epochs_after_reject`, `n_epochs_dropped`, `pct_epochs_dropped`, `autoreject_used`, `autoreject_threshold_uv_{mean,median,max}`, `n_channels_interpolated_per_epoch_mean`, `reject_threshold_uv` (null when AR succeeded)
+- Outcome: `status` ∈ {`OK`, `LOW_EPOCH_COUNT`}, `mean_amplitude_uv`, `std_amplitude_uv`
+
+`stages/cleaning/verify_qc.py OLD_TS NEW_TS` produces a side-by-side diff of two cleaning runs and reports PASS/FAIL against target thresholds (threshold-variance reduction, IC-exclusion distribution, drop-rate variance, status flips).
 
 ## 2. Feature Extraction (Stage 2)
 
@@ -293,9 +349,11 @@ Pre-specified, derived from literature review:
 ## References
 
 - Arns, M., Conners, C.K., & Kraemer, H.C. (2013). A decade of EEG theta/beta ratio research in ADHD. *J Attention Disorders*, 17(5), 374-383.
+- Coan, J.A. & Allen, J.J.B. (2004). Frontal EEG asymmetry as a moderator and mediator of emotion. *Biological Psychology*, 67(1-2), 7-49.
 - Diamond, A. (2013). Executive functions. *Annual Review of Psychology*, 64, 135-168.
 - Jas, M., et al. (2017). Autoreject: Automated artifact rejection for MEG and EEG data. *NeuroImage*, 159, 417-429.
 - Lundberg, S.M. & Lee, S.I. (2017). A unified approach to interpreting model predictions. *NeurIPS*.
+- Pion-Tonachini, L., Kreutz-Delgado, K., & Makeig, S. (2019). ICLabel: An automated electroencephalographic independent component classifier, dataset, and website. *NeuroImage*, 198, 181-197. https://doi.org/10.1016/j.neuroimage.2019.05.026
 - Miyake, A., et al. (2000). The unity and diversity of executive functions. *Cognitive Psychology*, 41(1), 49-100.
 - Vabalas, A., Gowen, E., Poliakoff, E., & Casson, A.J. (2019). Machine learning algorithm validation with a limited sample size. *PLOS ONE*, 14(11), e0224365. https://doi.org/10.1371/journal.pone.0224365
 - Varoquaux, G. (2018). Cross-validation failure: Small sample sizes lead to large error bars. *NeuroImage*, 180(Pt A), 68-77. https://doi.org/10.1016/j.neuroimage.2017.06.061

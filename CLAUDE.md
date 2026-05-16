@@ -13,8 +13,9 @@ pipeline.py                Slim orchestrator. CLI flags select stages.
 configs/config.yaml        Globals only: paths, recording, random_state. NOT a single source of truth.
 stages/
   cleaning/
-    config.yaml            Stage-local: input.from, output.to, params (bandpass, ICA, AutoReject, min_epochs)
-    cleaning.py            Stage 1: EDF -> cleaned epochs (HAPPE-compliant ICA flow)
+    config.yaml            Stage-local: input.from, output.to, params (bandpass, ICA, ICLabel, AutoReject, min_epochs)
+    cleaning.py            Stage 1: EDF -> cleaned epochs (infomax-ICA + ICLabel + AutoReject local; avg ref end-to-end)
+    verify_qc.py           Diff two cleaning runs' qc.json and flag QC regressions
     runs/<ts>/             Per-invocation outputs (gitignored, co-located with code)
     __init__.py            re-exports `run`, `load_cleaned_epochs`
   features/
@@ -132,12 +133,15 @@ These are load-bearing for scientific validity. Do not "simplify" them.
 - **SHAP per-CV-fold averaging** (`all_shap_values`), not SHAP on a model fit to the full cohort. The full-data SHAP is computed only for the summary plot.
 - **`cleaning.params.min_epochs` floor**. Subject-condition recordings whose surviving epoch count falls below this floor are dropped from disk (no `*-epo.fif` saved); downstream stages then never see them. Severely degraded recordings (e.g. one EO file with 29/144 epochs surviving in the pilot) bias PSD/coherence estimates more than they help — better excluded than diluted.
 - **FDR (Benjamini-Hochberg)** restricted to pre-specified hypotheses (H1-H3 + planned secondary tests). Do not extend the FDR scope to exploratory feature sweeps without flagging the change explicitly.
-- **ICA fit on a 1 Hz high-pass copy**, then applied to the 0.5 Hz filtered raw. Bad channel interpolation runs **after** ICA, not before. Edge trimming after filtering.
+- **Average reference applied before ICA fit**, not after `ica.apply`. Source EDFs are Mitsar A1-A2 (linked-mastoid, no M1/M2 channels in file); we commit to average reference for the rest of Stage 1 so the unmixing matrix W and `ica.apply` share a reference frame, and so ICLabel — which was trained on avg-ref data — classifies in the frame it expects. `qc.json` records `source_reference` and `output_reference` for provenance.
+- **ICA fit on a 1 Hz high-pass copy of the avg-referenced raw**; the unmixing matrix is then applied to the 0.5 Hz bandpassed avg-ref raw. Bad channel interpolation runs **after** ICA, not before. Edge trimming uses `filter_edge_crop_sec` (default 5 s; the previous 0.5 s was too short for a 0.5 Hz HP FIR transition).
+- **ICLabel + AutoReject local — no lenient retry.** Artifact components are flagged by `mne-icalabel` (infomax extended ICA, label in `iclabel_exclude_labels` AND probability > `iclabel_threshold`); the legacy `find_bads_eog`/Fp1-Fp2 correlation path is gone. Epoch rejection uses AutoReject local (per-channel CV thresholds, per-epoch interpolation). The data-driven lenient retry was removed because it gave noisy recordings looser thresholds, biasing comparisons; `min_epochs` is the only gate. Fp1/Fp2 are exempt from variance-based bad-channel flagging (pediatric blinks make them naturally high-variance; flagging them pushed the blink topography out of the ICA fit).
 
 ## Conventions
 
 - Python 3, sklearn-style pipelines. Use the existing `_build_models(random_state)` helper rather than instantiating models inline.
-- Optional dependencies (xgboost, lightgbm, catboost, torch, pennylane, shap, autoreject, coffeine, pyriemann) are imported in `try/except ImportError` at point of use and skipped gracefully — preserve this pattern.
+- **Required runtime deps for Stage 1** (cleaning): `mne`, `mne-icalabel`, `autoreject`, and an ICLabel backend (`onnxruntime` or `torch`). ICLabel will raise `ImportError` at point of use if no backend is present.
+- Optional dependencies (xgboost, lightgbm, catboost, torch, pennylane, shap, coffeine, pyriemann) are imported in `try/except ImportError` at point of use and skipped gracefully — preserve this pattern.
 - Print statements go to stdout via the configured logging handler in `pipeline.py`. Long-running stages should log progress; do not silence them.
 - Random seeds: read `config["random_state"]` (top-level global). `pipeline.py` seeds `random`, `numpy`, and `PYTHONHASHSEED` globally. New stochastic code must thread the seed through.
 - File paths inside stages: never read `config["paths"]["<stage>_dir"]` (those keys are gone). Use `config["input_dir"]` and `config["output_dir"]` resolved by `load_stage_config`. Never hardcode `./results/...` or `./stages/<stage>/runs/...`.
@@ -179,8 +183,17 @@ configs/config.yaml                  paths (edf_dir, behavioral_dir),
                                      recording (sfreq, channels, conditions),
                                      random_state
 stages/cleaning/config.yaml          bandpass, notch, epoch_duration/overlap,
-                                     ica_method/n_components, max_reject_pct,
-                                     bad_channel_threshold, min_epochs
+                                     filter_edge_crop_sec,
+                                     ica_method ("infomax"), ica_fit_params (extended),
+                                     ica_n_components,
+                                     iclabel_threshold, iclabel_exclude_labels,
+                                     bad_channel_threshold (MAD-z),
+                                     bad_channel_corr_threshold,
+                                     bad_channel_flatline_std,
+                                     variance_protect_channels (["Fp1","Fp2"]),
+                                     use_autoreject_local, fallback_reject_uv,
+                                     max_reject_pct (warning only; no retry),
+                                     min_epochs
 stages/features/config.yaml          bands, coherence_pairs, wavelet*,
                                      include_quantum
 stages/engineering/config.yaml       tbr_channels, faa_left/right,

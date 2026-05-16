@@ -41,12 +41,17 @@ The pipeline follows a modular, four-stage architecture with clearly separated d
 Raw EDF files
     |
     v
-STAGE 1: Preprocessing — stages/cleaning/cleaning.py (HAPPE-compliant)
-    Resampling (250 Hz) -> Bandpass 0.5-45 Hz -> Notch 50 Hz -> Edge trimming
-    -> Bad channel detection (MAD z-score + correlation)
-    -> ICA artefact removal (FastICA on 1 Hz high-pass copy, applied to 0.5 Hz)
-    -> Bad channel interpolation (after ICA) -> Average reference
-    -> 2-second epochs -> AutoReject artefact rejection
+STAGE 1: Preprocessing — stages/cleaning/cleaning.py
+    Resampling (250 Hz) -> Bandpass 0.5-45 Hz -> Notch 50 Hz -> Edge trim (5 s)
+    -> Bad channel detection (MAD z-score + correlation + flatline;
+                              Fp1/Fp2 exempt from variance flag)
+    -> Average reference (committed end-to-end; Mitsar source is A1-A2)
+    -> ICA artefact removal (infomax extended on 1 Hz HP avg-ref copy)
+    -> ICLabel classification + drop ICs labelled eye blink / muscle /
+       heart beat / line noise / channel noise with prob > 0.7
+    -> Bad channel interpolation (after ICA) -> Re-apply average reference
+    -> 2-second epochs -> AutoReject local (per-channel CV thresholds,
+                                            per-epoch interpolation)
     -> min_epochs floor: drop subject-condition recordings below threshold
     |
     v
@@ -82,7 +87,9 @@ STAGE 4: Statistical Analysis & ML — stages/analysis/analysis.py
 | Chance-level classification | Permutation test (200 permutations) with reported p-value |
 | Overfitting to small N | Bootstrap 95% CI; nested CV for hyperparameter tuning; SHAP stability across folds |
 | Class imbalance | Balanced class weights on applicable models (RF, SVM) |
-| Preprocessing order | ICA fitted on 1 Hz high-pass copy (prevents slow-drift contamination); bad channels interpolated after ICA, not before (preserves ICA source separation quality) |
+| Preprocessing order | Average reference applied before ICA fit so the unmixing matrix W and `ica.apply` share a reference frame; ICA fitted on a 1 Hz high-pass copy of the avg-ref raw (prevents slow-drift contamination); bad channels interpolated after ICA, not before (preserves ICA source separation quality) |
+| Artefact-component selection | `mne-icalabel` (infomax extended + ICLabel CNN) replaces EOG-correlation heuristics; component excluded only when label is in the artefact set AND probability > 0.7. Fp1/Fp2 are exempt from variance-based bad-channel flagging so blink topographies remain in the decomposition |
+| Epoch rejection | AutoReject local (Jas et al., 2017) with per-channel CV thresholds and per-epoch interpolation; no lenient-threshold retry, so noisy recordings are gated by `min_epochs` rather than relaxed thresholds |
 | Biological validity | Every top SHAP feature is mapped to a neural system, expected direction, EF relevance, and supporting literature (see `utils/bio_interpretation.py`) |
 | Mathematical transparency | All equations, loss functions, and feature definitions documented in [METHODS.md](METHODS.md) |
 | Reproducibility | Dockerfile, Makefile, pinned dependency versions, deterministic seeds, structured logging |
@@ -143,7 +150,7 @@ When `stages/features/config.yaml: include_quantum: true`, Stage 2 also extracts
 |-------|--------|---------|
 | Ethics approval | Complete | RS Soeharto Heerdjan Ethics Committee |
 | Pilot data collection (N = 28) | Complete | EEG + AUFEI + Flanker + Digit Span |
-| Preprocessing pipeline | Complete | HAPPE-compliant; min_epochs floor drops severely-degraded recordings (1 of 52 file-conditions excluded in pilot) |
+| Preprocessing pipeline | Complete | infomax-ICA + ICLabel + AutoReject local, average reference end-to-end; `min_epochs` floor drops severely-degraded recordings (1 of 52 file-conditions excluded in pilot) |
 | Feature extraction | Complete | ~1825 conventional features per subject; quantum-inspired features opt-in |
 | ML classification | Complete | Slim lineup (RF + SVM); permutation test, bootstrap CI, nested-CV tuning |
 | SHAP + biological interpretation | Complete | Per-fold SHAP with stability metrics |
@@ -171,7 +178,9 @@ biomarker-iium-pipeline/
   stages/                    # Each stage is a self-contained folder
     cleaning/                  Stage 1: EDF -> cleaned epochs
       cleaning.py
-      config.yaml              bandpass, ICA, AutoReject, min_epochs
+      verify_qc.py              Diff two cleaning runs' qc.json (regression check)
+      config.yaml              bandpass, ICA (infomax extended), ICLabel,
+                               AutoReject local, bad-channel thresholds, min_epochs
       runs/<ts>/               cleaned_epochs/, qc.json, run_notes.json (gitignored)
     features/                  Stage 2: epochs -> feature primitives
       features.py
@@ -233,8 +242,10 @@ Data are not included in this repository (participant privacy). See the data set
 - Dewi, S.Y., et al. (2025). Development of executive function assessment for Indonesian children (AUFEI). *[In preparation]*.
 - Diamond, A. (2013). Executive functions. *Annual Review of Psychology*, 64, 135-168.
 - Gabard-Durnam, L.J., et al. (2018). The Harvard Automated Processing Pipeline for EEG (HAPPE). *Frontiers in Neuroscience*, 12, 97.
+- Jas, M., et al. (2017). Autoreject: Automated artifact rejection for MEG and EEG data. *NeuroImage*, 159, 417-429.
 - Khrennikov, A., & Yamada, M. (2025). Quantum-like representation of neuronal networks' activity. *Frontiers in Human Neuroscience*, 19.
 - Lundberg, S.M., & Lee, S.I. (2017). A unified approach to interpreting model predictions. *Advances in Neural Information Processing Systems*, 30.
+- Pion-Tonachini, L., Kreutz-Delgado, K., & Makeig, S. (2019). ICLabel: An automated electroencephalographic independent component classifier, dataset, and website. *NeuroImage*, 198, 181-197.
 - Miyake, A., et al. (2000). The unity and diversity of executive functions. *Cognitive Psychology*, 41(1), 49-100.
 - Moffitt, T.E., et al. (2011). A gradient of childhood self-control predicts health, wealth, and public safety. *PNAS*, 108(7), 2693-2698.
 - Sauseng, P., et al. (2005). A shift of visual spatial attention is selectively associated with human EEG alpha activity. *European Journal of Neuroscience*, 22(11), 2917-2926.
