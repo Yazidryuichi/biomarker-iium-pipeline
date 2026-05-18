@@ -102,14 +102,14 @@ STAGE 6: Density-matrix Feature Extraction (exploratory, main branch)
 
 Before reading the numbers below, four points apply to everything reported in this section:
 
-1. **No correlation survives FDR correction at N = 28.** The strongest single correlation (TBR-Cz vs Global EF, Spearman rho = -0.383) has p = 0.044 uncorrected but does not survive Benjamini-Hochberg across the pre-specified test family. This is expected — the study is powered for N = 100, not the pilot.
+1. **No correlation survives FDR correction at N = 28.** The strongest single correlation (TBR frontal mean vs Global EF, Spearman rho = -0.489 at N = 25 after artefact rejection on 3 frontal-midline subjects) has p = 0.013 uncorrected but does not survive Benjamini-Hochberg across the pre-specified test family (FDR p = 0.09). This is expected — the study is powered for N = 100, not the pilot.
 2. **No classifier is significantly above chance at N = 28** under permutation testing. The best cells are marginal (p ≈ 0.08-0.12, see "Fair comparison" subsection below). The classification tables presented here are for transparency and method development; they are not claims of biomarker discovery.
 3. **The originally reported 95% bootstrap CIs were too tight.** The 7-classifier × 4-feature-set table (moved to appendix at the end of this section) uses per-fold bootstrap CIs (N=100 folds, only 28 actual subjects) that under-represent variance. Subject-level CIs from the Stage 5 fair-comparison rerun are 2-3× wider and should be preferred. The headline below leads with that fair comparison.
 4. **All claims here are pilot-scale.** We expect to revisit at the target N. Where a finding cuts against canonical practice (e.g., the dominance of posterior-parietal relative beta over the frontal TBR), the right reading is "the pre-specified TBR hypothesis did not find support at the pilot N," not "TBR has been refuted."
 
 ### Correlations
 
-TBR at Cz shows the strongest pre-specified association with Global EF: Spearman rho = -0.383, p = .044 uncorrected, with effect direction consistent with prior literature (higher TBR corresponds to lower executive function). The conversion to Cohen's d (d = 2·rho / √(1-rho²) = -0.83) is reported for comparability with prior QEEG-EF work but is non-standard for correlation effect sizes and should be read as a rough magnitude indicator only. **No correlations survive FDR correction at this sample size.**
+TBR frontal mean (aggregated Fz/F3/F4) shows the strongest pre-specified association with Global EF: Spearman rho = -0.489 at N = 25 (after artefact rejection on 3 subjects with insufficient frontal-midline data), raw p = 0.013, FDR-corrected p = 0.09. TBR at Cz on the same N = 25 subset reaches rho = -0.455 (raw p = 0.022). Effect direction is consistent with prior literature (higher TBR corresponds to lower executive function). The conversion to Cohen's d for the frontal-mean correlation (d = 2·rho / √(1-rho²) = -1.12) is reported for comparability with prior QEEG-EF work but is non-standard for correlation effect sizes and should be read as a rough magnitude indicator only. **No correlations survive FDR correction at this sample size.**
 
 ### Fair comparison (Stage 5) — density-matrix features vs classical QEEG features, matched 2×2 design
 
@@ -204,14 +204,18 @@ The SHAP rankings below come from the 7-model × 4-feature-set sweep above. Read
 
 | Rank | Feature | SHAP | Stability | Neural System |
 |------|---------|------|-----------|---------------|
-| 1 | Beta coherence F3-P3 | 0.144 | Stable | Fronto-parietal functional connectivity |
-| 2 | Absolute beta power Pz | 0.088 | Stable | Parietal cortical activation |
-| 3 | Relative beta power F4 | 0.055 | Stable | Right frontal vigilance |
-| 4 | Alpha reactivity (global) | 0.053 | Unstable | Cortical responsiveness |
-| 5 | TBR at Cz | 0.044 | Stable | Cortical arousal regulation |
-| 6 | Absolute beta power O1 | 0.034 | Stable | Occipital activation |
+| 1 | Relative beta power Pz | 0.0654 | Stable | Posterior-parietal cortical activation |
+| 2 | Relative beta power P3 | 0.0524 | Stable | Left posterior-parietal cortical activation |
+| 3 | Relative beta power O1 | 0.0426 | Stable | Left occipital cortical activation |
+| 4 | Relative beta power F8 | 0.0398 | Stable | Right inferior frontal cortical activation |
+| 5 | Relative beta power F4 | 0.0394 | Stable | Right frontal cortical activation |
+| 6 | Relative beta power F3 | 0.0258 | Stable | Left frontal cortical activation |
+| 7 | Relative beta power P4 | 0.0255 | Stable | Right posterior-parietal cortical activation |
+| 8 | Relative beta power Fp1 | 0.0229 | Stable | Left frontopolar cortical activation |
+| 9 | Relative beta power Fp2 | 0.0197 | Stable | Right frontopolar cortical activation |
+| 10 | Relative beta power Cz | 0.0171 | Stable | Central cortical activation |
 
-The dominance of fronto-parietal beta coherence and posterior-parietal relative beta — rather than the frontal theta/beta ratio that Arns, Conners & Kraemer (2013) foreground — is noteworthy at the pilot N, consistent with network-level theories of executive control (Sauseng et al., 2005). The TBR-Cz feature does appear (rank 5) but is not the top-ranked feature. This is reported transparently as a pilot-scale observation, not as a refutation of TBR.
+The dominance of posterior-parietal relative beta power (Pz, P3, O1) — rather than the frontal theta/beta ratio that Arns, Conners & Kraemer (2013) foreground — is noteworthy at the pilot N. The textbook theta/beta ratio at Cz did not appear in the top ten; neither did inter-regional coherence features. This is reported transparently as a pilot-scale observation, not as a refutation of TBR.
 
 ### Non-linear feature transforms (covariance density matrix, von Neumann entropy) — exploratory
 

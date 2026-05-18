@@ -1,0 +1,9 @@
+hypothesis,x,y,method,r,p,n,sig,p_fdr,sig_fdr
+H1: TBR ↔ Global EF (expected: negative),tbr_frontal_mean,Global_EF,Spearman,-0.489,0.0131,25,*,0.09,ns
+H2: Theta_Fz ↔ Global EF (expected: negative),psd_abs_theta_Fz,Global_EF,Spearman,0.24,0.2185,28,ns,0.3542,ns
+H3: TBR ↔ Flanker Effect (expected: positive),tbr_frontal_mean,flanker_effect,Spearman,-0.116,0.5803,25,ns,0.6632,ns
+TBR_Fz ↔ Global EF,tbr_Fz,Global_EF,Spearman,-0.389,0.0544,25,ns,0.1451,ns
+TBR_Cz ↔ Global EF,tbr_Cz,Global_EF,Spearman,-0.455,0.0225,25,*,0.09,ns
+FAA ↔ Global EF,faa_F4_F3,Global_EF,Spearman,0.031,0.8773,28,ns,0.8773,ns
+Alpha Reactivity ↔ Global EF,alpha_reactivity_global,Global_EF,Spearman,-0.156,0.4294,28,ns,0.5725,ns
+TBR ↔ Digit Span Backward,tbr_frontal_mean,BW_Span,Spearman,-0.254,0.2214,25,ns,0.3542,ns
