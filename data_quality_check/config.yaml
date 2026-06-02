@@ -1,0 +1,47 @@
+paths:
+  behavioral_dir: ./data/Behavioral
+  preprocessing_root: ./preprocessing/output
+  validation_root: ./validation/output
+  feature_engineering_root: ./feature_engineering/output
+
+random_state: 42
+
+params:
+  # AUFEI
+  aufei_filename: AUFEI-O_Cleaned.xlsx
+  aufei_likert_min: 1
+  aufei_likert_max: 4
+  aufei_subscales:
+    WM: [WM1, WM2, WM3, WM4, WM5]
+    IC: [IC1, IC2, IC3, IC4, IC5]
+    CF: [CF1, CF2, CF3, CF4, CF5]
+    P:  [P1,  P2,  P3,  P4,  P5]
+    SF: [SF1, SF2, SF3, SF4, SF5]
+
+  # Flanker
+  flanker_filename: Flanker_Test_Pilot.xlsx
+  # Subject is flagged ceiling if acc_overall >= this (EZ-DDM undefined at exactly 1.0)
+  flanker_acc_ceiling: 0.95
+  # Floor for plausible mean RT in seconds (children typically >= 0.30s)
+  flanker_rt_floor_sec: 0.25
+  # Sub-chance flagging: 2AFC chance = 0.5. Subjects below this on incongruent
+  # trials likely have response-mapping reversed or did not understand the task.
+  flanker_subchance_threshold: 0.50
+  # Typical pediatric Flanker congruency effect (literature: ~30-80 ms; below
+  # 30 ms suggests the task did not induce conflict, a construct-validity flag).
+  flanker_effect_typical_min_ms: 30
+  # Difference-score reliability flag: SB at or below this is non-recoverable.
+  difference_score_sb_floor: 0.30
+
+  # AUFEI variance-restriction flag (per subscale mean-of-items score).
+  # SD < this fraction of the Likert range = severe variance restriction
+  # (likely parent-report social-desirability compression to one end).
+  aufei_sd_fraction_of_range_floor: 0.10
+
+  # Digit Span (subitest max spans in standard administration)
+  digit_span_filename: Digit_Span.xlsx
+  digit_span_fw_max_plausible: 9
+  digit_span_bw_max_plausible: 8
+
+  # Whether to write the human-readable Markdown report
+  write_report_md: true

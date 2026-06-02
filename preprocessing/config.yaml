@@ -1,0 +1,38 @@
+paths:
+  edf_dir: ./data/EDF
+  behavioral_dir: ./data/Behavioral
+
+recording:
+  sfreq: 250
+  channels: [Fp1, Fp2, F7, F3, Fz, F4, F8, C3, Cz, C4, P3, Pz, P4, O1, O2]
+  conditions: [Eyes_Open, Eyes_Closed]
+
+random_state: 42
+
+params:
+  bandpass: [0.5, 45.0]
+  notch: 50.0
+  epoch_duration: 2.0
+  epoch_overlap: 0.0
+  filter_edge_crop_sec: 5.0
+
+  ica_method: infomax
+  ica_extended: true
+  ica_n_components: 14
+  iclabel_threshold: 0.7
+  iclabel_exclude_labels:
+    - eye blink
+    - muscle artifact
+    - heart beat
+    - line noise
+    - channel noise
+
+  bad_channel_threshold: 3.5
+  bad_channel_corr_threshold: 0.2
+  bad_channel_flatline_std: 1.0e-7
+  variance_protect_channels: [Fp1, Fp2]
+
+  use_autoreject_local: true
+  fallback_reject_uv: 150
+  max_reject_pct: 0.30
+  min_epochs: 60

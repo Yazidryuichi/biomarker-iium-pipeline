@@ -1,30 +1,32 @@
 # ============================================================
 # CRITICAL: Patient data must NEVER be committed
 # ============================================================
-# EDF files contain children's full names in filenames
 data/*.edf
 data/*.xlsx
 data/*.csv
 data/**/*.edf
-
-# Raw data directories
-EF_Biomarker/
-EDF_Files/
-AUFEI-O/
-Digital_Consent/
-Ethic_Approval_Docs/
-Archives/
 data/Behavioral/
 data/EDF/
 
-# Pipeline outputs (regenerable)
-# Each stage writes timestamped runs to stages/<stage>/runs/
-stages/*/runs/
-scripts/runs/
-results/
-logs/
-figures/
-!docs/figures/
+# Stage outputs (regenerable). Each stage writes timestamped runs to
+# <stage>/output/<YYYY-MM-DD_HHMMSS>/. We keep the output/ folder itself
+# tracked (placeholder) but ignore everything inside.
+preprocessing/output/*
+validation/output/*
+feature_building/output/*
+feature_engineering/output/*
+analysis/output/*
+data_quality_check/output/*
+feasibility_report/output/*
+!preprocessing/output/.gitkeep
+!validation/output/.gitkeep
+!feature_building/output/.gitkeep
+!feature_engineering/output/.gitkeep
+!analysis/output/.gitkeep
+!data_quality_check/output/.gitkeep
+!feasibility_report/output/.gitkeep
+
+# Heavy artifacts (defensive — same as the per-stage rules above)
 *.fif
 *.npz
 
@@ -33,10 +35,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-.eggs/
-dist/
-build/
-*.egg
 .venv/
 venv/
 env/
@@ -45,19 +43,12 @@ env/
 .ipynb_checkpoints/
 *.ipynb
 
-# OS
+# OS / IDE / env
 .DS_Store
 Thumbs.db
 *.swp
-*.swo
-
-# IDE
 .vscode/
 .idea/
-*.sublime-*
 .claude/
-
-# Environment
 .env
 .env.keys
-catboost_info/

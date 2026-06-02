@@ -1,0 +1,36 @@
+paths:
+  behavioral_dir: ./data/Behavioral
+  preprocessing_root: ./preprocessing/output
+
+random_state: 42
+
+params:
+  aufei_filename: AUFEI-O_Cleaned.xlsx
+  flanker_filename: Flanker_Test_Pilot.xlsx
+  digit_span_filename: Digit_Span.xlsx
+
+  # AUFEI subscale composition (item codes from the workbook). IC3 dropped:
+  # ceiling effect in the pilot (every subject scored 4).
+  aufei_subscales:
+    WM: [WM1, WM2, WM3, WM4, WM5]
+    IC: [IC1, IC2, IC4, IC5]
+    CF: [CF1, CF2, CF3, CF4, CF5]
+    P:  [P1,  P2,  P3,  P4,  P5]
+    SF: [SF1, SF2, SF3, SF4, SF5]
+
+  # Reliability thresholds for interpretation in the summary.
+  alpha_min_acceptable: 0.50
+  alpha_preferred: 0.70
+
+  # Flanker trial-level split-half settings.
+  flanker_split: odd_even           # odd_even | random
+  flanker_min_trials_per_half: 15   # below this, drop subject from reliability calc
+  # IMPORTANT: ddm_delta_v and flanker_effect are difference scores; their
+  # reliability is typically a fraction of the components' reliability and
+  # may even be negative. Reporting them here is a deliberate audit step,
+  # not an endorsement of using them as targets.
+  flanker_metrics: [acc_overall, acc_congruent, acc_incongruent,
+                    rt_mean, rt_congruent, rt_incongruent, rt_cv,
+                    flanker_effect,
+                    ddm_v, ddm_a, ddm_t,
+                    ddm_v_congruent, ddm_v_incongruent, ddm_delta_v]

@@ -1,0 +1,37 @@
+paths:
+  behavioral_dir: ./data/Behavioral
+  feature_building_root: ./feature_building/output
+
+random_state: 42
+
+params:
+  aufei_filename: AUFEI-O_Cleaned.xlsx
+  flanker_filename: Flanker_Test_Pilot.xlsx
+  digit_span_filename: Digit_Span.xlsx
+
+  assessment_date: "2026-03-09"
+  min_matched_n: 20
+
+  # AUFEI subscale composition. IC3 dropped (ceiling effect, pilot data).
+  aufei_subscales:
+    WM: [WM1, WM2, WM3, WM4, WM5]
+    IC: [IC1, IC2, IC4, IC5]
+    CF: [CF1, CF2, CF3, CF4, CF5]
+    P:  [P1,  P2,  P3,  P4,  P5]
+    SF: [SF1, SF2, SF3, SF4, SF5]
+
+  # Math-derived composites
+  tbr_channels: [Fz, F3, F4, Cz]
+  faa_left: F3
+  faa_right: F4
+  posterior_alpha_channels: [O1, O2, Pz]
+
+  # A priori Tier 1 composites (theory-driven, hypothesis-test set)
+  apriori_fm_theta_channels: [Fz, F3, F4]
+  apriori_posterior_alpha_channels: [Pz, P3, P4, O1, O2]
+  apriori_tbr_frontal_channels: [Fz, F3, F4]
+
+  # When feature_building emitted psd_periodic_* columns, also build periodic
+  # versions of the a_priori composites (suffixed _periodic). Allows analysis
+  # stage to test raw vs aperiodic-corrected as a sensitivity check.
+  build_periodic_composites: true

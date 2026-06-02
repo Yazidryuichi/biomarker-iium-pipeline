@@ -1,0 +1,69 @@
+paths:
+  feature_engineering_root: ./feature_engineering/output
+
+random_state: 42
+
+params:
+  # Targets — list. One subfolder per target under output/<ts>/.
+  targets:
+    - ddm_v_incongruent
+    # - ddm_delta_v
+    # - Global_EF
+
+  # Covariates entered into the OLS as regressors (NOT pre-residualization).
+  # By Frisch-Waugh, this is equivalent to residualizing both y and X against
+  # the covariates — handles the age-confound critique without leakage.
+  covariates: [age_months]
+
+  # Feature sets to test. Each is a list of composite column names that must
+  # already exist in full_dataset.csv (built by feature_engineering).
+  feature_sets:
+    a_priori_tier1:
+      - fm_theta_eo
+      - posterior_alpha_ec
+      - tbr_frontal_eo_log
+    # Sensitivity analysis with aperiodic-corrected band powers
+    a_priori_tier1_periodic:
+      - fm_theta_eo_periodic
+      - posterior_alpha_ec_periodic
+      - tbr_frontal_eo_log_periodic
+
+  # Directional priors per composite (sign expected if hypothesis is true).
+  # Composites not listed: two-sided test, no directional adjustment.
+  directions:
+    fm_theta_eo: positive
+    posterior_alpha_ec: positive
+    tbr_frontal_eo_log: negative
+    fm_theta_eo_periodic: positive
+    posterior_alpha_ec_periodic: positive
+    tbr_frontal_eo_log_periodic: negative
+
+  # Constituent columns for Cronbach's alpha gate per composite. Composites
+  # not listed are skipped (e.g. ratio measures like TBR have no constituents).
+  composite_components:
+    fm_theta_eo:
+      - eo_psd_abs_theta_Fz
+      - eo_psd_abs_theta_F3
+      - eo_psd_abs_theta_F4
+    posterior_alpha_ec:
+      - ec_psd_abs_alpha_Pz
+      - ec_psd_abs_alpha_P3
+      - ec_psd_abs_alpha_P4
+      - ec_psd_abs_alpha_O1
+      - ec_psd_abs_alpha_O2
+    fm_theta_eo_periodic:
+      - eo_psd_periodic_theta_Fz
+      - eo_psd_periodic_theta_F3
+      - eo_psd_periodic_theta_F4
+    posterior_alpha_ec_periodic:
+      - ec_psd_periodic_alpha_Pz
+      - ec_psd_periodic_alpha_P3
+      - ec_psd_periodic_alpha_P4
+      - ec_psd_periodic_alpha_O1
+      - ec_psd_periodic_alpha_O2
+
+  # Inference
+  alpha_level: 0.05
+  correction: bonferroni              # bonferroni | fdr_bh | none
+  bootstrap_n: 5000
+  alpha_min_acceptable: 0.50          # Cronbach gate (passes the composite)

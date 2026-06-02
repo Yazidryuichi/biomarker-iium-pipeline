@@ -1,0 +1,31 @@
+paths:
+  preprocessing_root: ./preprocessing/output
+
+random_state: 42
+
+params:
+  bands:
+    delta: [1, 4]
+    theta: [4, 8]
+    alpha: [8, 13]
+    beta:  [13, 30]
+
+  coherence_pairs:
+    - [Fz, Pz]
+    - [F3, P3]
+    - [F4, P4]
+
+  wavelet: "cmor1.5-1.0"
+  wavelet_n_freqs: 30
+  wavelet_freq_range: [2, 45]
+  wavelet_subsample_every: 5    # keep every Nth freq to reduce dim
+  wavelet_ratio_subsample: 10
+
+  # Aperiodic correction. When true, also outputs psd_periodic_<band>_<ch>
+  # columns derived from a specparam (FOOOF) periodic-only spectrum.
+  # Address: age-confound critique 2026-05-29 (age maturation flattens 1/f).
+  aperiodic_correction: true
+  specparam_freq_range: [1, 40]
+  specparam_peak_width_limits: [1.0, 8.0]
+  specparam_max_n_peaks: 6
+  specparam_min_peak_height: 0.1
