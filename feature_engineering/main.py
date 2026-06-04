@@ -159,10 +159,166 @@ def add_apriori_tier1(df, fm_chs, pa_chs, tbr_chs, source="abs"):
     return df
 
 
+def add_apriori_union(df, fc_channels=("Fz", "Cz"),
+                      po_channels=("O1", "O2", "Pz")):
+    """Build the 9 region-collapsed a priori union composites.
+
+    Channel collapsing rationale (15-channel Mitsar montage):
+      FC = {Fz, Cz}              FCz absent in the file
+      PO = {O1, O2, Pz}          POz absent in the file
+
+    Composites produced (raw region-mean; not z-scored, since predictors are
+    standardised inside the model pipeline at the analysis stage):
+
+      rel_theta_FC                cognitive control (FMtheta proxy), EO
+      rel_beta_FC                 cognitive control, EO
+      rel_alpha_PO                arousal / attention, EO
+      aperiodic_exponent_FC       E/I balance, maturation index, EO
+      aperiodic_exponent_PO       (same, posterior)
+      aperiodic_offset_FC         broadband offset, EO
+      aperiodic_offset_PO         (same, posterior)
+      paf_PO                      processing speed / WM index, EC
+      alpha_reactivity_PO         arousal regulation (EC -> EO normalised)
+
+    Intentionally excluded from Tier-1 union (per design spec):
+      TBR   collinear with rel_theta + rel_beta; correlate-only in tables
+      FAA   affective / approach-withdrawal; off-construct for cold-EF rest
+      Coh   fragile at short avg-ref epochs; deferred to method-refinement
+    """
+    def _mean(cols):
+        present = [c for c in cols if c in df.columns]
+        if not present:
+            return None
+        return df[present].mean(axis=1)
+
+    # Relative band power (EO)
+    for band in ("theta", "beta"):
+        s = _mean([f"eo_psd_rel_{band}_{ch}" for ch in fc_channels])
+        if s is not None:
+            df[f"rel_{band}_FC"] = s
+    s = _mean([f"eo_psd_rel_alpha_{ch}" for ch in po_channels])
+    if s is not None:
+        df["rel_alpha_PO"] = s
+
+    # Aperiodic exponent + offset, FC and PO (EO)
+    for region, chs in (("FC", fc_channels), ("PO", po_channels)):
+        for param in ("exponent", "offset"):
+            s = _mean([f"eo_aperiodic_{param}_{ch}" for ch in chs])
+            if s is not None:
+                df[f"aperiodic_{param}_{region}"] = s
+
+    # PAF posterior, EC
+    s = _mean([f"ec_paf_{ch}" for ch in po_channels])
+    if s is not None:
+        df["paf_PO"] = s
+
+    # Alpha reactivity PO (EC normalised by EC mean)
+    eo_cols = [f"eo_psd_abs_alpha_{ch}" for ch in po_channels
+               if f"eo_psd_abs_alpha_{ch}" in df.columns]
+    ec_cols = [f"ec_psd_abs_alpha_{ch}" for ch in po_channels
+               if f"ec_psd_abs_alpha_{ch}" in df.columns]
+    if eo_cols and ec_cols:
+        eo_mean = df[eo_cols].mean(axis=1)
+        ec_mean = df[ec_cols].mean(axis=1)
+        df["alpha_reactivity_PO"] = (ec_mean - eo_mean) / (ec_mean + 1e-10)
+
+    return df
+
+
+APRIORI_UNION_COLS = [
+    "rel_theta_FC", "rel_beta_FC", "rel_alpha_PO",
+    "aperiodic_exponent_FC", "aperiodic_exponent_PO",
+    "aperiodic_offset_FC", "aperiodic_offset_PO",
+    "paf_PO", "alpha_reactivity_PO",
+]
+
+
+def curate_features(df, variance_threshold=1e-6, collinearity_threshold=0.95,
+                    protect_cols=None):
+    """Unsupervised feature curation. Safe pre-CV (no target info used).
+
+    Operates only on EEG feature columns (prefix eo_/ec_ or a known
+    composite name). Behavioural / demographic columns are not touched.
+
+    Drops in two passes:
+      1. Near-constant: var < variance_threshold
+      2. Collinear: pairwise |r| > collinearity_threshold; first occurrence
+         in the column order is kept, later ones dropped (greedy).
+
+    `protect_cols` is a list of column names that MUST survive curation.
+    The a priori union composites (APRIORI_UNION_COLS) are always
+    protected — they are theory-driven and pre-registered; dropping them
+    silently for collinearity would defeat the confirmatory analysis.
+    They are also placed at the FRONT of the feature column order before
+    the collinearity pass, so when they happen to be collinear with a
+    non-protected feature, the non-protected feature is the one dropped.
+
+    Returns (df_after, keep_features, report_dict).
+    """
+    known_composites = set(APRIORI_UNION_COLS) | {
+        "alpha_reactivity_global", "eo_tbr_frontal_mean", "ec_tbr_frontal_mean",
+        "eo_faa_F4_F3", "ec_faa_F4_F3",
+    }
+    feature_cols = [c for c in df.columns
+                    if c.startswith(("eo_", "ec_")) or c in known_composites
+                    or c.startswith(("alpha_reactivity_",
+                                     "rel_", "aperiodic_", "paf_"))]
+    protected = set(protect_cols or []) | set(APRIORI_UNION_COLS)
+    protected = {c for c in protected if c in feature_cols}
+
+    # Place protected columns first so the greedy collinearity pass keeps
+    # them and drops the non-protected siblings instead.
+    ordered = [c for c in feature_cols if c in protected] + \
+              [c for c in feature_cols if c not in protected]
+
+    X = df[ordered].apply(pd.to_numeric, errors="coerce")
+
+    var = X.var(ddof=0)
+    low_var = [c for c in var[(var < variance_threshold) | var.isna()].index
+               if c not in protected]
+
+    X_filt = X.drop(columns=low_var)
+    corr = X_filt.corr(method="pearson").abs()
+    upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+    high_corr = []
+    for c in upper.columns:
+        if c in protected:
+            continue
+        if any(upper[c] > collinearity_threshold):
+            high_corr.append(c)
+
+    drop_set = set(low_var) | set(high_corr)
+    keep_features = [c for c in ordered if c not in drop_set]
+    non_features = [c for c in df.columns if c not in feature_cols]
+
+    df_after = df[keep_features + non_features].copy()
+    report = {
+        "n_features_before": len(feature_cols),
+        "n_features_after": len(keep_features),
+        "variance_threshold": variance_threshold,
+        "collinearity_threshold": collinearity_threshold,
+        "n_protected": len(protected),
+        "protected_columns_kept": sorted(protected),
+        "dropped_low_variance": low_var,
+        "dropped_collinear": high_corr,
+    }
+    return df_after, keep_features, report
+
+
 def add_all_engineered(df, p):
     df = add_tbr(df, p["tbr_channels"])
     df = add_faa(df, p["faa_left"], p["faa_right"])
     df = add_alpha_reactivity(df, p["posterior_alpha_channels"])
+
+    # A priori UNION (9 region-collapsed composites, primary feature set)
+    df = add_apriori_union(
+        df,
+        fc_channels=tuple(p.get("apriori_union_fc_channels", ("Fz", "Cz"))),
+        po_channels=tuple(p.get("apriori_union_po_channels",
+                                ("O1", "O2", "Pz"))),
+    )
+
+    # Legacy 3-feature Tier-1 (kept as comparable feature set for sensitivity)
     df = add_apriori_tier1(df, p["apriori_fm_theta_channels"],
                            p["apriori_posterior_alpha_channels"],
                            p["apriori_tbr_frontal_channels"], source="abs")
@@ -171,8 +327,47 @@ def add_all_engineered(df, p):
     if p.get("build_periodic_composites", True) and has_periodic:
         df = add_apriori_tier1(df, p["apriori_fm_theta_channels"],
                                p["apriori_posterior_alpha_channels"],
-                               p["apriori_tbr_frontal_channels"], source="periodic")
+                               p["apriori_tbr_frontal_channels"],
+                               source="periodic")
     return df, has_periodic
+
+
+def build_theory_mapping(targets):
+    """Per-target directional prior table for the 9 union composites.
+
+    Emitted as an annotation CSV alongside full_dataset.csv. The analysis
+    stage uses this to set one-sided directional p-values where applicable
+    in the confirmatory OLS path.
+    """
+    # Per-composite construct + sign predictions. Sign convention:
+    #   for rt_cv (lower = better attentional stability): predictor expected
+    #     to correlate negative if it indexes BETTER cognitive function
+    #   for ddm_v_incongruent (higher = better): positive if it indexes
+    #     better cognitive function
+    #   for BW_Span (higher = better WM): positive for cognitive predictors
+    #   for Global_EF (higher = better EF): positive for cognitive predictors
+    rows = []
+    rules = [
+        # composite,            construct,                                 v_inc,    BW,       Global_EF, rt_cv
+        ("rel_theta_FC",        "frontal theta (cognitive control)",       "positive","positive","positive","negative"),
+        ("rel_beta_FC",         "frontal beta (vigilance / readiness)",    "positive","positive","positive","negative"),
+        ("rel_alpha_PO",        "posterior alpha (attentional reserve)",   "positive","positive","positive","negative"),
+        ("aperiodic_exponent_FC","frontal 1/f slope (E/I; maturation)",     "positive","positive","positive","negative"),
+        ("aperiodic_exponent_PO","posterior 1/f slope (E/I; maturation)",   "positive","positive","positive","negative"),
+        ("aperiodic_offset_FC", "frontal broadband offset",                 "two_sided","two_sided","two_sided","two_sided"),
+        ("aperiodic_offset_PO", "posterior broadband offset",               "two_sided","two_sided","two_sided","two_sided"),
+        ("paf_PO",              "individual alpha frequency (processing)",  "positive","positive","positive","negative"),
+        ("alpha_reactivity_PO", "alpha system reactivity",                  "positive","positive","positive","negative"),
+    ]
+    for comp, construct, vi, bw, gef, rcv in rules:
+        rows.append({
+            "composite": comp, "construct": construct,
+            "dir_ddm_v_incongruent": vi,
+            "dir_BW_Span": bw,
+            "dir_Global_EF": gef,
+            "dir_rt_cv": rcv,
+        })
+    return pd.DataFrame(rows)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -298,11 +493,78 @@ def main():
     print(f"  Engineered features added: {n_added} "
           f"(periodic versions: {'yes' if has_periodic else 'no'})")
 
+    # Verify union composites built
+    union_built = [c for c in APRIORI_UNION_COLS if c in df.columns]
+    print(f"  A priori union composites built: {len(union_built)}/9 "
+          f"({union_built})")
+
     beh_dir = resolve(cfg["paths"]["behavioral_dir"])
     full = merge_behavioural(df, beh_dir, p)
 
+    # Unsupervised feature curation (safe pre-CV: no target info used)
+    curation_cfg = p.get("feature_selection_schemes", {}).get(
+        "unsupervised_curation", {})
+    curation_enable = bool(curation_cfg.get("enable", True))
+    if curation_enable:
+        full, curated_features, curation_report = curate_features(
+            full,
+            variance_threshold=float(curation_cfg.get(
+                "variance_threshold", 1e-6)),
+            collinearity_threshold=float(curation_cfg.get(
+                "collinearity_threshold", 0.95)),
+        )
+        with open(out_dir / "feature_curation_report.json", "w") as f:
+            json.dump(curation_report, f, indent=2, default=str)
+        print(f"  Curation: {curation_report['n_features_before']} -> "
+              f"{curation_report['n_features_after']} features kept "
+              f"(dropped {len(curation_report['dropped_low_variance'])} "
+              f"low-var + {len(curation_report['dropped_collinear'])} "
+              f"collinear)")
+    else:
+        curated_features = [c for c in full.columns
+                            if c.startswith(("eo_", "ec_"))
+                            or c in APRIORI_UNION_COLS]
+        curation_report = {"enable": False}
+
+    # Resolve the three feature_selection_schemes' column lists
+    theory_members = [c for c in APRIORI_UNION_COLS if c in full.columns]
+    data_driven_pool = list(curated_features)
+    hybrid_pool = [c for c in data_driven_pool if c not in set(theory_members)]
+    schemes_resolved = {
+        "theory": {
+            "members": theory_members,
+            "selector_in_analysis": "direct_fit",
+            "n_features": len(theory_members),
+        },
+        "data_driven": {
+            "members": data_driven_pool,
+            "selector_in_analysis": "l1_embedded_or_kbest",
+            "n_features": len(data_driven_pool),
+        },
+        "hybrid": {
+            "apriori_members": theory_members,
+            "rest_pool": hybrid_pool,
+            "selector_in_analysis":
+                "apriori_direct + l1_on_rest_with_kbest_cap",
+            "n_apriori": len(theory_members),
+            "n_rest_pool": len(hybrid_pool),
+        },
+    }
+    with open(out_dir / "feature_selection_schemes_resolved.json", "w") as f:
+        json.dump(schemes_resolved, f, indent=2, default=str)
+
+    # Theoretical mapping annotation (for paper / report)
+    targets_for_mapping = (p.get("targets_for_theory_mapping")
+                           or ["rt_cv", "ddm_v_incongruent",
+                               "BW_Span", "Global_EF"])
+    theory_map = build_theory_mapping(targets_for_mapping)
+    theory_map.to_csv(out_dir / "apriori_theory_mapping.csv", index=False)
+
     full.to_csv(out_dir / "full_dataset.csv", index=False)
     print(f"\n  full_dataset.csv: {full.shape}")
+    print(f"  Schemes: theory={len(theory_members)} | "
+          f"data_driven_pool={len(data_driven_pool)} | "
+          f"hybrid_rest_pool={len(hybrid_pool)}")
 
     notes = {
         "stage": "feature_engineering",
@@ -313,8 +575,17 @@ def main():
         "n_subjects_merged": int(full.shape[0]),
         "n_columns_total": int(full.shape[1]),
         "n_engineered_added": int(n_added),
+        "n_apriori_union_built": len(theory_members),
         "periodic_composites_built": bool(has_periodic),
-        "outputs": ["full_dataset.csv"],
+        "curation_enabled": bool(curation_enable),
+        "curation_n_after": (curation_report.get("n_features_after")
+                             if curation_enable else None),
+        "schemes_n": {k: (v.get("n_features") or v.get("n_apriori"))
+                      for k, v in schemes_resolved.items()},
+        "outputs": ["full_dataset.csv",
+                    "feature_curation_report.json",
+                    "feature_selection_schemes_resolved.json",
+                    "apriori_theory_mapping.csv"],
     }
     with open(out_dir / "run_notes.json", "w") as f:
         json.dump(notes, f, indent=2, default=str)

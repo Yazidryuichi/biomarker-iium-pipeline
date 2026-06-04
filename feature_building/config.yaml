@@ -21,11 +21,22 @@ params:
   wavelet_subsample_every: 5    # keep every Nth freq to reduce dim
   wavelet_ratio_subsample: 10
 
-  # Aperiodic correction. When true, also outputs psd_periodic_<band>_<ch>
-  # columns derived from a specparam (FOOOF) periodic-only spectrum.
-  # Address: age-confound critique 2026-05-29 (age maturation flattens 1/f).
+  # Aperiodic correction. When true, also outputs:
+  #   psd_periodic_<band>_<ch>     1/f-removed band power
+  #   aperiodic_exponent_<ch>      slope of 1/f (E/I-balance, maturation index)
+  #   aperiodic_offset_<ch>        intercept of 1/f (broadband offset)
+  # Addresses the age-confound critique (2026-05-29): pediatric 1/f flattens
+  # with age and contaminates raw band powers.
   aperiodic_correction: true
   specparam_freq_range: [1, 40]
   specparam_peak_width_limits: [1.0, 8.0]
   specparam_max_n_peaks: 6
   specparam_min_peak_height: 0.1
+
+  # PAF (peak alpha frequency). Primary estimator = spectral centroid
+  # (gravity frequency) in [paf_low_hz, paf_high_hz]; find_peaks used only
+  # when a sharp prominent peak is detected AND it lies within 2 Hz of the
+  # centroid. Children's alpha is often broad without a tight peak; the
+  # centroid is more stable than peak-picking in that regime.
+  paf_low_hz: 7.0
+  paf_high_hz: 13.0

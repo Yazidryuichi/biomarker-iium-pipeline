@@ -8,9 +8,19 @@ changes.
 A 5-stage Python pipeline plus two sidecar reporters that turns raw
 resting-state EDF recordings into candidate QEEG biomarkers of executive
 function in Indonesian children aged 6–12. Pilot N=26 (one subject-condition
-dropped by the cleaning floor), target N=100. Full regression only — no
-classification, no quantum, no median-split. See `README.md` for the
-user-facing summary.
+dropped by the cleaning floor), target N=100.
+
+**Primary inferential mode: confirmatory hierarchical OLS** on a 9-feature
+a priori union of theory-driven QEEG composites, with age as a regressor
+(Frisch-Waugh handling of the maturation confound). **Sensitivity track:
+exploratory ML grid** (ElasticNetCV primary; RandomForest / XGBoost
+sensitivity) over the same composites plus a data-driven curated pool
+plus a hybrid; selection-corrected permutation wraps the entire (target ×
+scheme × model) grid. No median-split classification, no quantum, no
+data-driven feature search on the confirmatory path. Exploratory ML nulls
+in this pilot are partly confounded with the Flanker construct-validity
+failure — that caveat must accompany any exploratory result in a report.
+See `README.md` for the user-facing summary.
 
 ## Repository layout (load-bearing)
 
@@ -26,7 +36,8 @@ biomarker-iium-pipeline/
 ├── feature_engineering/        Stage 4  (pipeline)
 ├── analysis/                   Stage 5  (pipeline)
 ├── data_quality_check/         Sidecar reporter — pilot QC document
-└── feasibility_report/         Sidecar reporter — pitch / feasibility doc
+└── research_report/            Sidecar reporter — research report
+                                 (data quality + pipeline + OLS + ML + screening)
 ```
 
 **Hard rules about the root**:
@@ -61,7 +72,8 @@ artifacts (`<ts>/`) are gitignored.
 - A *sidecar reporter* reads from multiple upstream stages, produces a
   human-readable report, and is not consumed by anyone downstream. Two
   exist: `data_quality_check/` (pilot QC audit, internal use) and
-  `feasibility_report/` (pitch / feasibility document, donor-facing).
+  `research_report/` (5-section research document: data quality + pipeline
+  description + confirmatory OLS + exploratory ML + screening index demo).
   Sidecars follow the same three-thing layout but are run on demand, not
   as part of the run chain.
 
@@ -94,10 +106,14 @@ data/EDF + data/Behavioral
    ▼ feature_engineering/main.py primitives + behavioural → composites
        └── output/<ts>/full_dataset.csv
    │
-   ▼ analysis/main.py            hierarchical OLS hypothesis test
+   ▼ analysis/main.py            confirmatory OLS + exploratory ML + screening index
        └── output/<ts>/<target>/<feature_set>/{summary.json,
            coef_inference.csv, bootstrap_ci.csv, block_f_test.json,
            composite_alpha.csv}
+       └── output/<ts>/exploratory_ml/{exploratory_ml_grid.csv,
+           exploratory_ml_summary.json}
+       └── output/<ts>/screening_index/{screening_index_<label>.csv,
+           screening_index_<label>_meta.json}
 
    ┄ data_quality_check/main.py  (sidecar; runs on demand)
        reads preprocessing + validation + feature_engineering + analysis
@@ -105,9 +121,9 @@ data/EDF + data/Behavioral
            flanker_*, digit_span_*, n_reconciliation,
            sample_demographics}.csv
 
-   ┄ feasibility_report/main.py  (sidecar; runs on demand)
+   ┄ research_report/main.py     (sidecar; runs on demand)
        reads all five pipeline stages + data_quality_check
-       └── output/<ts>/{feasibility_report.md, key_metrics.csv}
+       └── output/<ts>/research_report.md
 ```
 
 `validation` reads `preprocessing/output/` for the pass-rate summary but
@@ -119,11 +135,12 @@ does not block downstream stages — `feature_building` only depends on
   Markdown report plus supporting CSVs. Audience: PI + reviewers. Lead
   with construct-validity findings and target-reliability audit, not
   rosy summaries.
-- `feasibility_report` is the donor/funder-facing feasibility pitch. Pulls
-  numbers from all upstream stages plus the QC sidecar; templates the
-  narrative prose in `main.py` so re-running with new data refreshes
-  the document automatically. Budget/timeline/ask are config-driven
-  placeholders the PI fills before circulating.
+- `research_report` is the consolidated research document. Five sections:
+  (1) sample & data quality, (2) pipeline description + flow diagram,
+  (3) confirmatory a priori OLS, (4) exploratory ML grid (with explicit
+  construct-validity caveat), (5) screening index — illustrative
+  prospect output (LOO out-of-sample, Bayesian-shrunk, with prediction
+  interval; explicit non-clinical labeling).
 
 ## Methodological invariants (do not regress)
 
@@ -191,13 +208,75 @@ Load-bearing for scientific validity. Do not "simplify" them.
   extend correction scope to exploratory sweeps without flagging the
   scope change explicitly.
 
-- **Aperiodic correction is opt-in, not default**. `feature_building`
-  produces `psd_periodic_<band>_<ch>` columns when specparam is installed
-  AND `params.aperiodic_correction: true`. `feature_engineering`
-  auto-builds `*_periodic` composite siblings when periodic primitives
-  exist. The analysis stage runs both raw and `_periodic` feature sets as
-  sensitivity analysis. Treats the periodic version as the cleaner
-  estimate for paper-ready inference, the raw as the legacy comparison.
+- **Aperiodic correction is on by default when specparam is installed**.
+  `feature_building` produces `psd_periodic_<band>_<ch>`,
+  `aperiodic_exponent_<ch>`, and `aperiodic_offset_<ch>` per channel per
+  condition. The a priori union composites include
+  `aperiodic_exponent_{FC,PO}` and `aperiodic_offset_{FC,PO}` as primary
+  features. specparam 2.0 API: pull aperiodic params via
+  `m.get_params("aperiodic")` (returns `[offset, exponent]` in fixed
+  mode); spectra via `m.results.model.modeled_spectrum` and
+  `m.results.model._ap_fit`. Old `m.fooofed_spectrum_` /
+  `m.aperiodic_params_` attributes are gone in 2.0.
+
+- **PAF = spectral centroid first, find_peaks second**. Children's alpha
+  is often broad without a sharp peak (Klimesch 1999; Grandy et al. 2013).
+  `extract_paf` defaults to the gravity frequency in 7-13 Hz; find_peaks
+  is used only when a sharp prominent peak is detected AND lies within
+  2 Hz of the centroid (sanity check). Do not flip the default to
+  peak-picking without re-validating on the developmental sample.
+
+- **A priori UNION (9 composites) is the primary feature set**. Region-
+  collapsed (FC = Fz+Cz; PO = O1+O2+Pz). Includes relative band powers,
+  aperiodic exponent/offset, PAF, and alpha reactivity. The legacy 3-
+  feature Tier-1 (`fm_theta_eo`, `posterior_alpha_ec`,
+  `tbr_frontal_eo_log`) remains available as a sensitivity feature set
+  but is no longer primary. TBR, FAA, and coherence are intentionally
+  excluded from the union (TBR = collinear with rel_theta + rel_beta;
+  FAA = off-construct for cold-EF rest; coherence = fragile at short
+  avg-ref epochs). They are computed and available as correlate-table
+  rows but never enter the OLS or ML grid.
+
+- **Confirmatory OLS path uses per-target directional priors**. Loaded
+  from `apriori_theory_mapping.csv` emitted by `feature_engineering`.
+  The mapping is the single source of truth for which composites are
+  predicted to be positively or negatively related to each target. The
+  `directions:` block in `analysis/config.yaml` covers only the legacy
+  Tier-1 — the union composites are looked up by target.
+
+- **Exploratory ML grid is sensitivity, not primary**. ElasticNetCV is
+  the primary ML model (linear, regularized, l1_ratio path for
+  collinearity handling). RandomForest (depth=3, min_samples_leaf=3) and
+  XGBoost (when installed, depth=3) are reported as non-linearity / model-
+  class checks. No nested hyperparameter tuning beyond ElasticNetCV's
+  internal regularization path (Vabalas 2019 — outer tuning at N≈26
+  inflates the estimate). Three schemes: theory (direct, 9 union),
+  data_driven (full curated pool; L1 self-selects for ElasticNet,
+  in-CV SelectKBest k=10 for tree models), hybrid (union + L1 on rest
+  pool).
+
+- **Selection-corrected permutation wraps the full ML grid**, not the
+  best post-hoc combo. Per-target max-statistic permutation distribution
+  across the (scheme × model) sub-grid. Per-combo uncorrected
+  permutation p is also reported but flagged as such. Do not pick best
+  combo and re-permute on it alone — that gives anti-conservative p.
+
+- **Screening index runs for ONE pre-specified combo, not the whole grid**.
+  Per `feedback_no_manufactured_validation` Rule 7: pre-specify in config
+  (`screening_index.target` + `feature_set`); the pre-spec is the
+  confirmatory OLS combo (primary target = `rt_cv`, feature set =
+  `a_priori_union`). LOO predictions + Bayesian shrinkage + per-subject
+  prediction interval + `confidence_flag` tied to incremental F over
+  age-only. NOT a diagnostic. NOT ROC against any pseudo-label
+  (no external caseness label exists in pilot). Percentile within-sample
+  only — no tier labels.
+
+- **Target ordering by construct-validity independence first**.
+  Primary = `rt_cv` (construct-valid even when the Flanker is broken;
+  SB = 0.97 on n = 28). NOT `ddm_v_incongruent` (secondary with n = 6
+  caveat). NOT `ddm_delta_v` (retracted; reliability not estimable at
+  this ceiling; difference-score reliability paradox). See
+  `feedback_target_ordering.md` in memory.
 
 ## Knob locations
 
@@ -222,22 +301,45 @@ validation/config.yaml            aufei_subscales (item codes per subscale),
 feature_building/config.yaml      bands, coherence_pairs, wavelet*,
                                   aperiodic_correction (bool),
                                   specparam_* (freq_range, peak_width_limits,
-                                  max_n_peaks, min_peak_height)
+                                  max_n_peaks, min_peak_height),
+                                  paf_low_hz / paf_high_hz (PAF centroid
+                                  band, default 7-13 Hz)
 
 feature_engineering/config.yaml   aufei_subscales (must mirror validation),
                                   assessment_date, min_matched_n,
                                   tbr_channels, faa_left, faa_right,
                                   posterior_alpha_channels,
-                                  apriori_*_channels (Tier 1 components),
-                                  build_periodic_composites (bool)
+                                  apriori_union_fc_channels (Fz, Cz),
+                                  apriori_union_po_channels (O1, O2, Pz),
+                                  apriori_*_channels (legacy Tier-1 only),
+                                  build_periodic_composites (bool),
+                                  targets_for_theory_mapping[] (per-target
+                                  directional priors emitted in
+                                  apriori_theory_mapping.csv),
+                                  feature_selection_schemes{
+                                    unsupervised_curation{
+                                      enable, variance_threshold,
+                                      collinearity_threshold},
+                                    schemes{theory, data_driven, hybrid}}
 
-analysis/config.yaml              targets[], covariates (default age_months),
-                                  feature_sets{name: [composite cols]},
-                                  directions{composite: positive|negative},
-                                  composite_components{composite: [items]}
-                                  (drives Cronbach gate),
+analysis/config.yaml              targets[] (primary first = rt_cv),
+                                  retracted_targets[] (documented but
+                                  not run: ddm_delta_v, flanker_effect),
+                                  covariates (default age_months),
+                                  feature_sets{a_priori_union (primary),
+                                    a_priori_tier1 (legacy sensitivity),
+                                    a_priori_tier1_periodic},
+                                  directions{} (legacy only; union dirs
+                                  loaded from apriori_theory_mapping.csv),
+                                  composite_components{} (Cronbach gate),
                                   alpha_level, correction, bootstrap_n,
-                                  alpha_min_acceptable
+                                  alpha_min_acceptable,
+                                  exploratory_ml{enable, cv{n_splits,
+                                    n_repeats}, perm{n_perm,
+                                    perm_n_splits}, kbest_cap,
+                                    schemes_to_run[]},
+                                  screening_index{enable, target,
+                                    feature_set, label_prefix}
 
 data_quality_check/config.yaml    aufei_subscales (must mirror validation),
                                   aufei_likert_min / aufei_likert_max
@@ -257,24 +359,12 @@ data_quality_check/config.yaml    aufei_subscales (must mirror validation),
                                   flanker_rt_floor_sec, digit_span_*_max,
                                   write_report_md
 
-feasibility_report/config.yaml    project_title, institution,
+research_report/config.yaml       project_title, institution,
                                   collaborating_site, ethics_body
-                                  (header metadata for the pitch);
-                                  main_study_n_target,
-                                  main_study_primary_target,
-                                  main_study_secondary_target,
-                                  retracted_targets[] (analysis-plan
-                                  outputs from the pilot);
-                                  power_assumptions{expected_r,
-                                  alpha_two_sided, target_power,
-                                  delta_r2_detectable, k_composites};
-                                  preregistered_exclusion_rules[];
-                                  fixes{flanker_task, aufei_instrument,
-                                  digit_span, aperiodic_correction,
-                                  target_replacement} (narrative blocks
-                                  for §6); budget_placeholder,
-                                  timeline_placeholder, ask_placeholder
-                                  (PI fills before circulating)
+                                  (header metadata); narrative section
+                                  prose templated in main.py. No
+                                  feasibility-pitch placeholders — this
+                                  is a research document, not a donor ask.
 ```
 
 To add a new knob: put it in `params:` of the stage's config that needs it.
@@ -317,11 +407,14 @@ python preprocessing/main.py        # ~5-10 min for 52 files
 python validation/main.py           # <30 sec
 python feature_building/main.py     # ~5-10 min
 python feature_engineering/main.py  # <30 sec
-python analysis/main.py             # ~30 sec, bootstrap is the bottleneck
+python analysis/main.py             # ~5-30 min when exploratory_ml.enable=true
+                                    # (permutation grid is the bottleneck);
+                                    # ~30 sec when only confirmatory OLS
 
 # Sidecars (on demand)
 python data_quality_check/main.py   # <10 sec — internal QC audit
-python feasibility_report/main.py   # <5 sec  — donor-facing pitch doc
+python research_report/main.py      # <10 sec — research report
+                                    # (data quality + pipeline + OLS + ML + screening)
 ```
 
 Re-run only what changed. Each stage caches; downstream stages auto-pick
@@ -335,7 +428,7 @@ the latest run of their predecessor.
 | Composite definitions, behavioural scoring, age params | `feature_engineering` |
 | Targets, feature sets, directions, correction, bootstrap N | `analysis` only |
 | Want a fresh pilot quality snapshot | `data_quality_check` (sidecar, doesn't invalidate anything else) |
-| Want a refreshed donor / feasibility doc | `feasibility_report` (sidecar; re-pulls all upstream) |
+| Want a refreshed research report | `research_report` (sidecar; re-pulls all upstream) |
 
 Old `<stage>/output/<ts>/` accumulate; prune by hand.
 
@@ -362,10 +455,11 @@ Old `<stage>/output/<ts>/` accumulate; prune by hand.
   report. Gitignored (under `output/`); regenerate with the sidecar
   whenever a refreshed snapshot is needed. Do not promote it to a
   committed top-level `.md`.
-- `feasibility_report/output/<ts>/feasibility_report.md` — generated
-  donor/funder-facing feasibility document. Gitignored. Regenerate
-  whenever upstream stages produce new evidence the pitch should reflect.
-  Do not promote to a committed top-level `.md`.
+- `research_report/output/<ts>/research_report.md` — generated 5-section
+  research document (data quality + pipeline description + confirmatory
+  OLS + exploratory ML + screening index demo). Gitignored. Regenerate
+  whenever upstream stages produce new evidence. Do not promote to a
+  committed top-level `.md`.
 
 Do not create any other `.md` files at the root or in stage folders unless
 explicitly requested. Methodology notes go in docstrings + this file.

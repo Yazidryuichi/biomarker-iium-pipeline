@@ -26,12 +26,51 @@ params:
   faa_right: F4
   posterior_alpha_channels: [O1, O2, Pz]
 
-  # A priori Tier 1 composites (theory-driven, hypothesis-test set)
+  # A priori UNION (primary feature set; 9 region-collapsed composites).
+  # Channel collapsing reflects 15-ch Mitsar availability:
+  #   FC = {Fz, Cz}              FCz absent
+  #   PO = {O1, O2, Pz}          POz absent
+  apriori_union_fc_channels: [Fz, Cz]
+  apriori_union_po_channels: [O1, O2, Pz]
+
+  # Legacy Tier-1 (3 composites; kept as a sensitivity comparison feature set).
+  # The UNION above supersedes these for primary analysis.
   apriori_fm_theta_channels: [Fz, F3, F4]
   apriori_posterior_alpha_channels: [Pz, P3, P4, O1, O2]
   apriori_tbr_frontal_channels: [Fz, F3, F4]
 
   # When feature_building emitted psd_periodic_* columns, also build periodic
-  # versions of the a_priori composites (suffixed _periodic). Allows analysis
-  # stage to test raw vs aperiodic-corrected as a sensitivity check.
+  # versions of the (legacy) Tier-1 composites for sensitivity analysis.
   build_periodic_composites: true
+
+  # Targets referenced when emitting apriori_theory_mapping.csv (per-target
+  # directional prior table). Primary first.
+  targets_for_theory_mapping: [rt_cv, ddm_v_incongruent, BW_Span, Global_EF]
+
+  # ----- Feature selection schemes (declaration) -----
+  # Membership / pool definitions live HERE. Selector application (L1
+  # embedded, SelectKBest, direct fit) happens INSIDE the CV folds at the
+  # analysis stage to avoid leakage.
+  feature_selection_schemes:
+    # Unsupervised curation runs once before the CV split (it cannot leak
+    # because no target information is used). Drops near-constant + tightly
+    # collinear columns; produces the curated pool used by data_driven /
+    # hybrid schemes.
+    unsupervised_curation:
+      enable: true
+      variance_threshold: 1.0e-6
+      collinearity_threshold: 0.95
+    # The three schemes the analysis stage will run. Resolved column lists
+    # are emitted to feature_selection_schemes_resolved.json so the analysis
+    # stage reads the explicit membership rather than re-computing it.
+    schemes:
+      theory:
+        description: "9 a priori union composites; direct fit, no selection"
+        members: apriori_union
+      data_driven:
+        description: "Full curated pool; L1 embedded (ElasticNet) does selection inside CV"
+        members: curated_pool
+      hybrid:
+        description: "9 a priori always in; L1 on rest_pool with k<=10 cap inside CV"
+        apriori_members: apriori_union
+        rest_members: curated_pool_minus_apriori

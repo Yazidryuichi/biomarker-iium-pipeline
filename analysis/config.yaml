@@ -4,32 +4,58 @@ paths:
 random_state: 42
 
 params:
-  # Targets — list. One subfolder per target under output/<ts>/.
+  # ──────────────────────────────────────────────────────────────
+  # Targets
+  # ──────────────────────────────────────────────────────────────
+  # Ordering rule (see feedback_target_ordering.md):
+  #   Primary = construct-validity independence first, reliability second
+  #   rt_cv  = construct-valid even when Flanker is broken; SB=0.97 on n=28
+  #   ddm_v_incongruent = SB=0.99 BUT on n=6 non-ceiling subsample; caveat
+  #   BW_Span / Global_EF = secondary working-memory / parent-report
+  #   ddm_delta_v / flanker_effect = RETRACTED (do not run live)
   targets:
-    - ddm_v_incongruent
-    # - ddm_delta_v
-    # - Global_EF
+    - rt_cv                 # PRIMARY
+    - ddm_v_incongruent     # secondary with n=6 reliability caveat
+    - BW_Span               # secondary
+    - Global_EF             # secondary with AUFEI variance-restriction caveat
 
-  # Covariates entered into the OLS as regressors (NOT pre-residualization).
-  # By Frisch-Waugh, this is equivalent to residualizing both y and X against
-  # the covariates — handles the age-confound critique without leakage.
+  retracted_targets:        # documented but NOT analysed
+    - ddm_delta_v
+    - flanker_effect
+
+  # Covariates entered into the OLS as regressors (Frisch-Waugh handling
+  # of age — equivalent to residualizing both y and features against age).
   covariates: [age_months]
 
-  # Feature sets to test. Each is a list of composite column names that must
-  # already exist in full_dataset.csv (built by feature_engineering).
+  # ──────────────────────────────────────────────────────────────
+  # Confirmatory feature sets (a priori, used in hypothesis_test)
+  # ──────────────────────────────────────────────────────────────
   feature_sets:
+    a_priori_union:
+      # The 9 region-collapsed Tier-1 union composites (primary set).
+      - rel_theta_FC
+      - rel_beta_FC
+      - rel_alpha_PO
+      - aperiodic_exponent_FC
+      - aperiodic_exponent_PO
+      - aperiodic_offset_FC
+      - aperiodic_offset_PO
+      - paf_PO
+      - alpha_reactivity_PO
     a_priori_tier1:
+      # Legacy 3-feature Tier-1 (sensitivity comparison only).
       - fm_theta_eo
       - posterior_alpha_ec
       - tbr_frontal_eo_log
-    # Sensitivity analysis with aperiodic-corrected band powers
     a_priori_tier1_periodic:
       - fm_theta_eo_periodic
       - posterior_alpha_ec_periodic
       - tbr_frontal_eo_log_periodic
 
-  # Directional priors per composite (sign expected if hypothesis is true).
-  # Composites not listed: two-sided test, no directional adjustment.
+  # Directional priors per composite. Per-target signs are loaded from
+  # feature_engineering/output/<latest>/apriori_theory_mapping.csv when
+  # available — that mapping table is the single source of truth for the
+  # 9 union composites. The entries below cover the legacy Tier-1 only.
   directions:
     fm_theta_eo: positive
     posterior_alpha_ec: positive
@@ -38,9 +64,39 @@ params:
     posterior_alpha_ec_periodic: positive
     tbr_frontal_eo_log_periodic: negative
 
-  # Constituent columns for Cronbach's alpha gate per composite. Composites
-  # not listed are skipped (e.g. ratio measures like TBR have no constituents).
+  # Cronbach gate constituents. For the 9 union composites, components are
+  # the channels collapsed into the region mean (FC = Fz/Cz; PO = O1/O2/Pz).
   composite_components:
+    rel_theta_FC:
+      - eo_psd_rel_theta_Fz
+      - eo_psd_rel_theta_Cz
+    rel_beta_FC:
+      - eo_psd_rel_beta_Fz
+      - eo_psd_rel_beta_Cz
+    rel_alpha_PO:
+      - eo_psd_rel_alpha_O1
+      - eo_psd_rel_alpha_O2
+      - eo_psd_rel_alpha_Pz
+    aperiodic_exponent_FC:
+      - eo_aperiodic_exponent_Fz
+      - eo_aperiodic_exponent_Cz
+    aperiodic_exponent_PO:
+      - eo_aperiodic_exponent_O1
+      - eo_aperiodic_exponent_O2
+      - eo_aperiodic_exponent_Pz
+    aperiodic_offset_FC:
+      - eo_aperiodic_offset_Fz
+      - eo_aperiodic_offset_Cz
+    aperiodic_offset_PO:
+      - eo_aperiodic_offset_O1
+      - eo_aperiodic_offset_O2
+      - eo_aperiodic_offset_Pz
+    paf_PO:
+      - ec_paf_O1
+      - ec_paf_O2
+      - ec_paf_Pz
+    # alpha_reactivity_PO is a derived ratio — no internal-consistency gate
+    # Legacy Tier-1
     fm_theta_eo:
       - eo_psd_abs_theta_Fz
       - eo_psd_abs_theta_F3
@@ -51,19 +107,49 @@ params:
       - ec_psd_abs_alpha_P4
       - ec_psd_abs_alpha_O1
       - ec_psd_abs_alpha_O2
-    fm_theta_eo_periodic:
-      - eo_psd_periodic_theta_Fz
-      - eo_psd_periodic_theta_F3
-      - eo_psd_periodic_theta_F4
-    posterior_alpha_ec_periodic:
-      - ec_psd_periodic_alpha_Pz
-      - ec_psd_periodic_alpha_P3
-      - ec_psd_periodic_alpha_P4
-      - ec_psd_periodic_alpha_O1
-      - ec_psd_periodic_alpha_O2
 
-  # Inference
+  # ──────────────────────────────────────────────────────────────
+  # Confirmatory inference (hypothesis_test / OLS)
+  # ──────────────────────────────────────────────────────────────
   alpha_level: 0.05
   correction: bonferroni              # bonferroni | fdr_bh | none
   bootstrap_n: 5000
-  alpha_min_acceptable: 0.50          # Cronbach gate (passes the composite)
+  alpha_min_acceptable: 0.50          # Cronbach gate floor
+
+  # ──────────────────────────────────────────────────────────────
+  # Exploratory ML (sensitivity track; LOO-validated)
+  # ──────────────────────────────────────────────────────────────
+  # Run a per-(target × scheme × model) RepeatedKFold OOF R^2 grid plus a
+  # selection-corrected permutation test that wraps the entire grid per
+  # target. Reported as estimation alongside the confirmatory OLS; the
+  # nulls here are EXPECTED to be partly construct-confounded (Flanker
+  # task did not induce conflict in pilot) and that caveat must appear
+  # in any downstream report.
+  exploratory_ml:
+    enable: true
+    cv:
+      n_splits: 5
+      n_repeats: 3
+    perm:
+      n_perm: 100
+      perm_n_splits: 5
+    kbest_cap: 10                 # in-CV SelectKBest cap for non-linear models
+    # Schemes resolved by feature_engineering; analysis reads
+    # feature_selection_schemes_resolved.json. Listed here for visibility.
+    schemes_to_run: [theory, data_driven, hybrid]
+
+  # ──────────────────────────────────────────────────────────────
+  # Screening index (illustrative output product; ONE pre-spec combo)
+  # ──────────────────────────────────────────────────────────────
+  # Per Rule 7 in feedback_no_manufactured_validation: one combo only,
+  # from the confirmatory OLS path (NOT the exploratory ML grid). LOO
+  # out-of-sample + Bayesian shrinkage + per-subject prediction interval
+  # + confidence_flag tied to incremental F over age-only.
+  #
+  # Naming: "candidate EF screening index". NOT diagnostic. NOT anchored
+  # to clinical norms. Percentile within sample only — no tier labels.
+  screening_index:
+    enable: true
+    target: rt_cv                        # primary target only
+    feature_set: a_priori_union          # confirmatory feature set
+    label_prefix: rt_cv__a_priori_union__OLS

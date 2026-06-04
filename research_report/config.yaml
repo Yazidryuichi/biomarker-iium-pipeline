@@ -1,0 +1,37 @@
+paths:
+  preprocessing_root: ./preprocessing/output
+  validation_root: ./validation/output
+  feature_building_root: ./feature_building/output
+  feature_engineering_root: ./feature_engineering/output
+  analysis_root: ./analysis/output
+  data_quality_check_root: ./data_quality_check/output
+
+random_state: 42
+
+params:
+  # ──────────────────────────────────────────────────────────────
+  # Project framing (for the report header — edit freely)
+  # ──────────────────────────────────────────────────────────────
+  project_title: >-
+    Quantitative EEG biomarkers of executive function in Indonesian
+    children aged 6-12: pilot research report
+  institution: International Islamic University Malaysia (IIUM)
+  collaborating_site: Talenta Center, Jakarta, Indonesia
+  ethics_body: RS Soeharto Heerdjan (ethics approval, 2026)
+
+  # ──────────────────────────────────────────────────────────────
+  # Section anchors
+  # ──────────────────────────────────────────────────────────────
+  # The primary confirmatory analysis combination referenced in Section 3
+  # and used by the screening index in Section 5. Should mirror
+  # analysis/config.yaml:screening_index.{target,feature_set}.
+  primary_target: rt_cv
+  primary_feature_set: a_priori_union
+
+  # Targets reported in the exploratory ML grid section (Section 4).
+  # The primary first; secondaries get explicit construct-validity
+  # caveats in the section caption.
+  ml_targets: [rt_cv, ddm_v_incongruent, BW_Span, Global_EF]
+
+  # Whether to include an ASCII flow diagram in Section 2.
+  include_flow_diagram: true

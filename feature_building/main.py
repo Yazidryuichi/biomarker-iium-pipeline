@@ -125,7 +125,18 @@ def extract_psd(epochs, bands):
 
 
 def extract_psd_periodic(mean_psd, freqs, ch_names, bands, sp_cfg):
-    """Re-integrate band power on the periodic (1/f-removed) PSD via specparam."""
+    """Fit specparam per channel; emit periodic band powers + aperiodic
+    exponent/offset.
+
+    Three column families produced per channel:
+      psd_periodic_<band>_<ch>     1/f-removed band power (re-integrated)
+      aperiodic_exponent_<ch>      slope of the 1/f component (E/I-balance proxy,
+                                    maturation index)
+      aperiodic_offset_<ch>        intercept of the 1/f component (broadband
+                                    power offset)
+
+    Fixed-mode fit (no knee) — appropriate for the 1-40 Hz window we use.
+    """
     try:
         from specparam import SpectralModel
     except Exception:
@@ -148,13 +159,20 @@ def extract_psd_periodic(mean_psd, freqs, ch_names, bands, sp_cfg):
                 verbose=False,
             )
             m.fit(f_use, mean_psd[i, mask])
-            # periodic = full fit - aperiodic in log space; back to linear
-            log_full = m.fooofed_spectrum_         # log10 power
-            log_ap = m._ap_fit
+            # specparam 2.0 API: modeled spectrum + aperiodic component
+            # both live under m.results.model (log10 power scale).
+            log_full = np.asarray(m.results.model.modeled_spectrum)
+            log_ap = np.asarray(m.results.model._ap_fit)
             log_per = log_full - log_ap
             per = np.power(10.0, log_per)
+            # Aperiodic params in fixed mode: [offset, exponent]
+            ap = np.asarray(m.get_params("aperiodic"), dtype=float)
+            offset = float(ap[0]) if ap.size >= 1 else float("nan")
+            exponent = float(ap[1]) if ap.size >= 2 else float("nan")
         except Exception:
             per = np.full_like(f_use, np.nan)
+            offset = float("nan")
+            exponent = float("nan")
         for band, (lo, hi) in bands.items():
             bmask = (f_use >= lo) & (f_use < hi)
             if bmask.any() and np.all(np.isfinite(per[bmask])):
@@ -162,6 +180,47 @@ def extract_psd_periodic(mean_psd, freqs, ch_names, bands, sp_cfg):
             else:
                 bp = float("nan")
             out[f"psd_periodic_{band}_{ch}"] = bp
+        out[f"aperiodic_exponent_{ch}"] = exponent
+        out[f"aperiodic_offset_{ch}"] = offset
+    return out
+
+
+def extract_paf(mean_psd, freqs, ch_names, alpha_low=7.0, alpha_high=13.0):
+    """Peak alpha frequency per channel.
+
+    Primary estimator: **spectral centroid** (gravity frequency) within
+    `alpha_low`..`alpha_high`. Children's alpha is often broad with no
+    sharp peak; the centroid is more stable than `find_peaks` in that
+    regime (Klimesch 1999; Grandy et al. 2013 noted broadening in
+    developmental samples).
+
+    Fallback: if a sharp peak with prominence >= 30% of band max is
+    detected AND lies within 2 Hz of the centroid (sanity check), use
+    the peak frequency. Otherwise the centroid is the output.
+    """
+    mask = (freqs >= alpha_low) & (freqs <= alpha_high)
+    f_use = freqs[mask]
+    out = {}
+    for i, ch in enumerate(ch_names):
+        spec = mean_psd[i, mask]
+        total = float(np.sum(spec))
+        if total <= 0 or not np.all(np.isfinite(spec)):
+            out[f"paf_{ch}"] = float("nan")
+            continue
+        # Primary: gravity / centroid
+        centroid = float(np.sum(f_use * spec) / total)
+        # Fallback: sharp peak detection
+        try:
+            peaks, _ = sig.find_peaks(spec, prominence=float(spec.max()) * 0.30)
+            if peaks.size:
+                top = int(peaks[int(np.argmax(spec[peaks]))])
+                peak_f = float(f_use[top])
+                if abs(peak_f - centroid) < 2.0:
+                    out[f"paf_{ch}"] = peak_f
+                    continue
+        except Exception:
+            pass
+        out[f"paf_{ch}"] = centroid
     return out
 
 
@@ -368,6 +427,12 @@ def main():
                 else:
                     per_feats.pop("_specparam_available", None)
                 feats.update(per_feats)
+
+            # PAF (gravity frequency 7-13 Hz; find_peaks fallback)
+            paf_low = float(p.get("paf_low_hz", 7.0))
+            paf_high = float(p.get("paf_high_hz", 13.0))
+            feats.update(extract_paf(mean_psd, freqs, ep.ch_names,
+                                     alpha_low=paf_low, alpha_high=paf_high))
 
             feats.update(extract_coherence(ep, pairs, bands))
             feats.update(extract_wavelet(ep, p))

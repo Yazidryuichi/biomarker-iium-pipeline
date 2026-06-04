@@ -17,14 +17,14 @@ feature_building/output/*
 feature_engineering/output/*
 analysis/output/*
 data_quality_check/output/*
-feasibility_report/output/*
+research_report/output/*
 !preprocessing/output/.gitkeep
 !validation/output/.gitkeep
 !feature_building/output/.gitkeep
 !feature_engineering/output/.gitkeep
 !analysis/output/.gitkeep
 !data_quality_check/output/.gitkeep
-!feasibility_report/output/.gitkeep
+!research_report/output/.gitkeep
 
 # Heavy artifacts (defensive — same as the per-stage rules above)
 *.fif
