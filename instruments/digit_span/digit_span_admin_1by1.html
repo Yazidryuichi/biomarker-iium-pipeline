@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digit Span Test - Admin Interface</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    min-height: 100vh;
+  }
+
+  .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+
+  /* Header */
+  .header {
+    text-align: center;
+    padding: 24px 0 16px;
+    border-bottom: 1px solid #1e293b;
+    margin-bottom: 20px;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; color: #f8fafc; }
+  .header .sub { font-size: 13px; color: #64748b; margin-top: 4px; }
+
+  /* Participant input */
+  .info-bar {
+    margin-bottom: 20px; padding: 14px 16px;
+    background: #1e293b; border-radius: 10px;
+    display: grid; grid-template-columns: auto 1fr; gap: 6px 10px;
+    align-items: center;
+  }
+  .info-bar label { font-size: 13px; color: #94a3b8; white-space: nowrap; }
+  .info-bar input {
+    background: #0f172a; border: 1px solid #334155;
+    color: #f8fafc; padding: 6px 10px; border-radius: 6px;
+    font-size: 14px; outline: none; width: 100%;
+  }
+  .info-bar input:focus { border-color: #3b82f6; }
+
+  .instructions {
+    background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
+    color: #94a3b8; line-height: 1.6;
+  }
+  .instructions summary {
+    cursor: pointer; color: #e2e8f0; font-weight: 500; font-size: 13px;
+  }
+
+  /* Condition tabs */
+  .tabs {
+    display: flex; gap: 4px; margin-bottom: 16px;
+    background: #1e293b; border-radius: 10px; padding: 4px;
+  }
+  .tab {
+    flex: 1; text-align: center; padding: 10px; border-radius: 8px;
+    cursor: pointer; font-size: 14px; font-weight: 500;
+    color: #94a3b8; transition: all 0.2s;
+  }
+  .tab:hover { color: #e2e8f0; }
+  .tab.active { background: #3b82f6; color: #fff; }
+  .tab .badge {
+    display: inline-block; font-size: 11px; margin-left: 4px;
+    background: rgba(255,255,255,0.15); padding: 1px 6px; border-radius: 10px;
+  }
+
+  /* Current trial display */
+  .now-playing {
+    background: #1e293b; border-radius: 14px; padding: 28px 24px;
+    text-align: center; margin-bottom: 16px;
+    border: 1px solid #334155;
+  }
+  .now-playing.done { border-color: #22c55e; background: #0f2a1a; }
+
+  .level-label {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #64748b; margin-bottom: 4px;
+  }
+  .trial-label {
+    font-size: 32px; font-weight: 700; color: #f8fafc;
+    margin-bottom: 4px;
+  }
+  .span-label { font-size: 14px; color: #94a3b8; margin-bottom: 20px; }
+
+  /* Big play button */
+  .play-btn {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: #3b82f6; border: none; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: all 0.15s; position: relative;
+  }
+  .play-btn:hover { background: #2563eb; transform: scale(1.05); }
+  .play-btn:active { transform: scale(0.95); }
+  .play-btn:disabled { background: #334155; cursor: not-allowed; transform: none; }
+  .play-btn svg { width: 32px; height: 32px; fill: #fff; }
+
+  .play-hint { font-size: 12px; color: #64748b; margin-top: 10px; }
+
+  /* Sequence (admin only) */
+  .sequence-reveal {
+    margin-top: 16px; padding-top: 14px;
+    border-top: 1px solid #334155;
+  }
+  .seq-toggle {
+    font-size: 12px; color: #64748b; cursor: pointer;
+    background: none; border: none; text-decoration: underline;
+  }
+  .seq-digits {
+    font-size: 28px; font-weight: 600; letter-spacing: 8px;
+    color: #fbbf24; margin-top: 8px; font-family: 'Courier New', monospace;
+  }
+  .seq-words { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+
+  /* Score buttons */
+  .score-row {
+    display: flex; gap: 10px; justify-content: center;
+    margin-top: 20px;
+  }
+  .score-btn {
+    padding: 10px 28px; border-radius: 10px; border: 2px solid;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s; background: transparent;
+  }
+  .score-btn.correct { border-color: #22c55e; color: #22c55e; }
+  .score-btn.correct:hover { background: #22c55e; color: #fff; }
+  .score-btn.wrong { border-color: #ef4444; color: #ef4444; }
+  .score-btn.wrong:hover { background: #ef4444; color: #fff; }
+  .score-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  /* Trial list */
+  .trial-list { margin-top: 12px; }
+  .trial-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; border-radius: 8px;
+    margin-bottom: 4px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .trial-item:hover { background: #1e293b; }
+  .trial-item.current { background: #1e293b; border: 1px solid #3b82f6; }
+  .trial-item.scored { opacity: 0.6; }
+
+  .trial-num { width: 28px; font-size: 13px; color: #64748b; text-align: center; }
+  .trial-info { flex: 1; }
+  .trial-info .top { font-size: 14px; color: #e2e8f0; }
+  .trial-info .bot { font-size: 12px; color: #64748b; }
+  .trial-result {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+  }
+  .trial-result.correct { background: #166534; color: #4ade80; }
+  .trial-result.wrong { background: #7f1d1d; color: #f87171; }
+  .trial-result.pending { background: #334155; color: #64748b; }
+
+  /* Discontinue banner */
+  .discontinue {
+    background: #7f1d1d; border: 1px solid #dc2626;
+    border-radius: 10px; padding: 14px 18px;
+    text-align: center; margin: 16px 0;
+    font-size: 14px; color: #fca5a5;
+  }
+
+  /* Summary */
+  .summary {
+    background: #1e293b; border-radius: 14px;
+    padding: 24px; margin-top: 20px;
+  }
+  .summary h3 { font-size: 16px; margin-bottom: 14px; color: #f8fafc; }
+  .summary-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  }
+  .summary-card {
+    background: #0f172a; border-radius: 10px; padding: 16px;
+    text-align: center;
+  }
+  .summary-card .val { font-size: 28px; font-weight: 700; color: #3b82f6; }
+  .summary-card .lbl { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+
+  /* Keyboard hint */
+  .kbd-hint {
+    text-align: center; margin-top: 12px;
+    font-size: 11px; color: #475569;
+  }
+  kbd {
+    background: #334155; padding: 2px 6px; border-radius: 4px;
+    font-family: monospace; font-size: 11px; color: #94a3b8;
+  }
+
+  .restart-btn {
+    display: block; margin: 16px auto 0; padding: 8px 20px;
+    background: #334155; color: #94a3b8; border: none;
+    border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  .restart-btn:hover { background: #475569; color: #e2e8f0; }
+
+  .export-btn {
+    display: block; margin: 10px auto 0; padding: 10px 24px;
+    background: #166534; color: #4ade80; border: 1px solid #22c55e;
+    border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  .export-btn:hover { background: #15803d; color: #fff; }
+  .export-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+
+<script>
+const DIGIT_WORDS = {
+  0:"nol",1:"satu",2:"dua",3:"tiga",4:"empat",
+  5:"lima",6:"enam",7:"tujuh",8:"delapan",9:"sembilan"
+};
+
+const FORWARD = [
+  [3,7],[5,1],[4,9,2],[6,1,8],[3,8,5,2],[7,1,4,9],
+  [2,9,6,1,3],[5,3,8,4,7],[1,7,3,9,5,2],[8,4,6,1,9,3],
+  [3,5,1,8,6,2,9],[7,2,4,9,1,5,3],
+  [5,9,3,7,1,6,2,8],[4,1,8,3,6,9,5,2]
+];
+
+const BACKWARD = [
+  [2,5],[6,3],[5,7,4],[2,9,1],[7,3,8,1],[4,6,2,9],
+  [1,8,5,3,6],[9,2,7,4,1],[3,6,9,1,7,4],[5,8,2,4,1,7],
+  [8,1,5,9,3,6,2],[4,7,3,1,8,5,9]
+];
+
+function buildTrials(seqs, prefix) {
+  return seqs.map((seq, i) => ({
+    level: Math.floor(i/2)+1,
+    trial: (i%2)+1,
+    span: seq.length,
+    digits: seq,
+    prefix,
+    file: `digit_span_audio/${prefix}_L${Math.floor(i/2)+1}_T${(i%2)+1}_span${seq.length}.mp3`,
+    result: null // null | 'correct' | 'wrong'
+  }));
+}
+
+const state = {
+  condition: 'FW',
+  fw: buildTrials(FORWARD, 'FW'),
+  bw: buildTrials(BACKWARD, 'BW'),
+  currentIdx: 0,
+  playing: false,
+  played: false,
+  showSeq: false,
+  discontinued: false,
+  participant: '',
+  participantName: '',
+  enumerator: ''
+};
+
+let audio = null;
+
+function trials() { return state.condition === 'FW' ? state.fw : state.bw; }
+function current() { return trials()[state.currentIdx]; }
+
+function checkDiscontinue() {
+  const t = trials();
+  const idx = state.currentIdx;
+  const cur = t[idx];
+  if (!cur) return false;
+
+  // Both trials of same level scored wrong?
+  const levelTrials = t.filter(x => x.level === cur.level);
+  if (levelTrials.length === 2 && levelTrials.every(x => x.result === 'wrong')) {
+    return true;
+  }
+  // Check previous completed level
+  if (cur.level > 1) {
+    const prevLevel = t.filter(x => x.level === cur.level - 1);
+    if (prevLevel.length === 2 && prevLevel.every(x => x.result === 'wrong')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getSpan(trialList) {
+  let span = 0;
+  const maxLevel = Math.max(...trialList.map(t => t.level));
+  for (let l = 1; l <= maxLevel; l++) {
+    const lvl = trialList.filter(t => t.level === l);
+    if (lvl.some(t => t.result === 'correct')) span = lvl[0].span;
+  }
+  return span;
+}
+
+function getTotalScore(trialList) {
+  return trialList.filter(t => t.result === 'correct').length;
+}
+
+function play() {
+  const t = current();
+  if (!t || state.playing) return;
+  if (audio) { audio.pause(); audio = null; }
+  audio = new Audio(t.file);
+  state.playing = true;
+  state.played = false;
+  render();
+
+  audio.onended = () => { state.playing = false; state.played = true; render(); };
+  audio.onerror = () => {
+    state.playing = false;
+    alert(`File tidak ditemukan: ${t.file}\nPastikan folder digit_span_audio/ ada di lokasi yang sama.`);
+    render();
+  };
+  audio.play();
+}
+
+function score(result) {
+  current().result = result;
+  state.played = false;
+  state.showSeq = false;
+
+  // Check discontinue
+  if (checkDiscontinue()) {
+    state.discontinued = true;
+    render();
+    return;
+  }
+
+  // Advance
+  if (state.currentIdx < trials().length - 1) {
+    state.currentIdx++;
+  }
+  render();
+}
+
+function switchCondition(c) {
+  if (audio) { audio.pause(); audio = null; }
+  state.condition = c;
+  state.currentIdx = 0;
+  state.playing = false;
+  state.played = false;
+  state.showSeq = false;
+  state.discontinued = false;
+  render();
+}
+
+function goToTrial(idx) {
+  if (audio) { audio.pause(); audio = null; }
+  state.currentIdx = idx;
+  state.playing = false;
+  state.played = false;
+  state.showSeq = false;
+  state.discontinued = false;
+  render();
+}
+
+function restart() {
+  if (!confirm('Reset semua skor dan data partisipan?\nPastikan sudah export .xlsx terlebih dahulu.')) return;
+  state.fw.forEach(t => t.result = null);
+  state.bw.forEach(t => t.result = null);
+  state.currentIdx = 0;
+  state.playing = false;
+  state.played = false;
+  state.showSeq = false;
+  state.discontinued = false;
+  state.participant = '';
+  state.participantName = '';
+  render();
+}
+
+function render() {
+  const t = trials();
+  const c = current();
+  const allDone = t.every(x => x.result !== null) || state.discontinued;
+  const fwScored = state.fw.filter(x => x.result !== null).length;
+  const bwScored = state.bw.filter(x => x.result !== null).length;
+
+  let html = `
+    <div class="header">
+      <h1>Digit Span Test</h1>
+      <div class="sub">Administrator Interface — Lampiran F</div>
+    </div>
+
+    <div class="instructions">
+      <details>
+        <summary>📋 Petunjuk untuk Enumerator</summary>
+        <br>1. Isi identitas partisipan di bawah.<br>
+        2. Tekan tombol ▶ (atau <kbd>Space</kbd>) untuk memutar audio.<br>
+        3. Dengarkan jawaban anak, lalu tekan <b>✓ Benar</b> (<kbd>←</kbd>) atau <b>✗ Salah</b> (<kbd>→</kbd>).<br>
+        4. Jika ragu, tekan "Lihat kunci" untuk melihat jawaban yang benar.<br>
+        5. Jika anak salah di <b>kedua trial</b> dalam satu level → otomatis berhenti.<br>
+        6. Setelah selesai Forward, pindah ke tab <b>Backward</b>.<br>
+        7. Klik <b>Export .xlsx</b> sebelum pindah ke partisipan berikutnya.
+      </details>
+    </div>
+
+    <div class="info-bar">
+      <label>Kode:</label>
+      <input type="text" placeholder="Mis. P001" value="${state.participant}"
+             oninput="state.participant=this.value">
+      <label>Nama:</label>
+      <input type="text" placeholder="Nama/inisial anak" value="${state.participantName}"
+             oninput="state.participantName=this.value">
+      <label>Enumerator:</label>
+      <input type="text" placeholder="Nama enumerator" value="${state.enumerator}"
+             oninput="state.enumerator=this.value">
+    </div>
+
+    <div class="tabs">
+      <div class="tab ${state.condition==='FW'?'active':''}" onclick="switchCondition('FW')">
+        Forward <span class="badge">${fwScored}/${state.fw.length}</span>
+      </div>
+      <div class="tab ${state.condition==='BW'?'active':''}" onclick="switchCondition('BW')">
+        Backward <span class="badge">${bwScored}/${state.bw.length}</span>
+      </div>
+    </div>`;
+
+  if (state.discontinued) {
+    html += `<div class="discontinue">
+      ⛔ DISCONTINUE — Kedua trial pada Level ${c.level} salah.
+    </div>`;
+  }
+
+  // Summary if condition done
+  if (allDone) {
+    const span = getSpan(t);
+    const total = getTotalScore(t);
+    const label = state.condition === 'FW' ? 'Forward' : 'Backward';
+    html += `
+      <div class="summary">
+        <h3>Hasil ${label}</h3>
+        <div class="summary-grid">
+          <div class="summary-card">
+            <div class="val">${span}</div>
+            <div class="lbl">Span ${label}</div>
+          </div>
+          <div class="summary-card">
+            <div class="val">${total}</div>
+            <div class="lbl">Total Skor</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Current trial
+  if (c && !allDone) {
+    const isScored = c.result !== null;
+    html += `
+    <div class="now-playing ${isScored?'done':''}">
+      <div class="level-label">Level ${c.level} — Trial ${c.trial}</div>
+      <div class="trial-label">Span ${c.span}</div>
+      <div class="span-label">${c.span} digit</div>
+
+      <button class="play-btn" onclick="play()" ${state.playing?'disabled':''}>
+        <svg viewBox="0 0 24 24">${state.playing
+          ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+          : '<polygon points="5,3 19,12 5,21"/>'
+        }</svg>
+      </button>
+      <div class="play-hint">${state.playing ? 'Memutar...' : state.played ? 'Selesai — skor di bawah' : 'Tekan untuk memutar'}</div>
+
+      <div class="sequence-reveal">
+        <button class="seq-toggle" onclick="state.showSeq=!state.showSeq;render()">
+          ${state.showSeq ? 'Sembunyikan kunci' : 'Lihat kunci jawaban'}
+        </button>
+        ${state.showSeq ? `
+          <div class="seq-digits">${c.digits.join('  ')}</div>
+          <div class="seq-words">${c.digits.map(d=>DIGIT_WORDS[d]).join(' — ')}</div>
+        ` : ''}
+      </div>
+
+      <div class="score-row">
+        <button class="score-btn correct" onclick="score('correct')"
+          ${!state.played && c.result===null ? 'disabled' : ''}>✓ Benar</button>
+        <button class="score-btn wrong" onclick="score('wrong')"
+          ${!state.played && c.result===null ? 'disabled' : ''}>✗ Salah</button>
+      </div>
+    </div>`;
+  }
+
+  // Trial list
+  html += `<div class="trial-list">`;
+  t.forEach((tr, idx) => {
+    const isCurrent = idx === state.currentIdx && !allDone;
+    const res = tr.result;
+    html += `
+      <div class="trial-item ${isCurrent?'current':''} ${res?'scored':''}"
+           onclick="goToTrial(${idx})">
+        <div class="trial-num">${idx+1}</div>
+        <div class="trial-info">
+          <div class="top">Level ${tr.level}, Trial ${tr.trial}</div>
+          <div class="bot">Span ${tr.span} — ${tr.digits.join(' - ')}</div>
+        </div>
+        <div class="trial-result ${res||'pending'}">
+          ${res==='correct'?'✓':res==='wrong'?'✗':'·'}
+        </div>
+      </div>`;
+  });
+  html += `</div>`;
+
+  html += `
+    <div class="kbd-hint">
+      <kbd>Space</kbd> Play &nbsp; <kbd>←</kbd> Benar &nbsp; <kbd>→</kbd> Salah
+    </div>
+    <div class="btn-row">
+      <button class="restart-btn" onclick="restart()">Reset Semua</button>
+      <button class="export-btn" onclick="exportXLSX()"
+        ${(fwScored + bwScored) === 0 ? 'disabled' : ''}>📥 Export .xlsx</button>
+    </div>`;
+
+  document.getElementById('app').innerHTML = html;
+}
+
+function exportXLSX() {
+  const pid = state.participant || 'UNKNOWN';
+  const pname = state.participantName || '';
+  const admin = state.enumerator || '';
+  const now = new Date().toISOString().slice(0,10);
+
+  // Sheet 1: Trial-level data
+  const rows = [];
+  [['Forward', state.fw], ['Backward', state.bw]].forEach(([cond, trials]) => {
+    trials.forEach(t => {
+      rows.push({
+        'Kode Partisipan': pid,
+        'Nama': pname,
+        'Enumerator': admin,
+        'Tanggal': now,
+        'Kondisi': cond,
+        'Level': t.level,
+        'Trial': t.trial,
+        'Span': t.span,
+        'Deretan Angka': t.digits.join(' - '),
+        'Hasil': t.result === 'correct' ? 1 : t.result === 'wrong' ? 0 : '',
+        'Keterangan': t.result === 'correct' ? 'Benar' : t.result === 'wrong' ? 'Salah' : 'Belum'
+      });
+    });
+  });
+
+  // Sheet 2: Summary
+  const fwSpan = getSpan(state.fw);
+  const bwSpan = getSpan(state.bw);
+  const fwTotal = getTotalScore(state.fw);
+  const bwTotal = getTotalScore(state.bw);
+  const summary = [{
+    'Kode Partisipan': pid,
+    'Nama': pname,
+    'Enumerator': admin,
+    'Tanggal': now,
+    'Forward Span': fwSpan,
+    'Forward Total Skor': fwTotal,
+    'Backward Span': bwSpan,
+    'Backward Total Skor': bwTotal,
+    'Total Span (FW+BW)': fwSpan + bwSpan,
+    'Total Skor (FW+BW)': fwTotal + bwTotal
+  }];
+
+  const wb = XLSX.utils.book_new();
+
+  const ws1 = XLSX.utils.json_to_sheet(rows);
+  ws1['!cols'] = [
+    {wch:18},{wch:20},{wch:18},{wch:12},{wch:10},{wch:6},{wch:6},{wch:6},{wch:30},{wch:6},{wch:10}
+  ];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Trial Data');
+
+  const ws2 = XLSX.utils.json_to_sheet(summary);
+  ws2['!cols'] = [
+    {wch:18},{wch:20},{wch:18},{wch:12},{wch:14},{wch:18},{wch:14},{wch:18},{wch:18},{wch:18}
+  ];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
+
+  XLSX.writeFile(wb, `DigitSpan_${pid}_${now}.xlsx`);
+}
+
+// Prevent accidental close with unsaved data
+window.addEventListener('beforeunload', function(e) {
+  const scored = state.fw.some(t => t.result !== null) || state.bw.some(t => t.result !== null);
+  if (scored) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); play(); }
+  if (e.code === 'ArrowLeft' && state.played) { score('correct'); }
+  if (e.code === 'ArrowRight' && state.played) { score('wrong'); }
+});
+
+render();
+</script>
+</body>
+</html>

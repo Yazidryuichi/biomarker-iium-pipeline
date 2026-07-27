@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digit Span Test - Admin Interface</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+
+  .header { text-align: center; padding: 24px 0 16px; border-bottom: 1px solid #1e293b; margin-bottom: 20px; }
+  .header h1 { font-size: 20px; font-weight: 600; color: #f8fafc; }
+  .header .sub { font-size: 13px; color: #64748b; margin-top: 4px; }
+
+  .counter-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    background: #1e293b; border-radius: 10px; padding: 10px 16px; margin-bottom: 12px; font-size: 13px;
+  }
+  .counter-bar .left { color: #94a3b8; }
+  .counter-bar .count { font-size: 22px; font-weight: 700; color: #3b82f6; margin: 0 4px; }
+  .counter-bar .export-sm {
+    padding: 6px 14px; background: #166534; color: #4ade80; border: 1px solid #22c55e;
+    border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .counter-bar .export-sm:hover { background: #15803d; color: #fff; }
+  .counter-bar .export-sm:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .info-bar {
+    margin-bottom: 16px; padding: 14px 16px; background: #1e293b; border-radius: 10px;
+    display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center;
+  }
+  .info-bar label { font-size: 13px; color: #94a3b8; white-space: nowrap; }
+  .info-bar input {
+    background: #0f172a; border: 1px solid #334155; color: #f8fafc;
+    padding: 6px 10px; border-radius: 6px; font-size: 14px; outline: none; width: 100%;
+  }
+  .info-bar input:focus { border-color: #3b82f6; }
+
+  .instructions {
+    background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: #94a3b8; line-height: 1.6;
+  }
+  .instructions summary { cursor: pointer; color: #e2e8f0; font-weight: 500; font-size: 13px; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; background: #1e293b; border-radius: 10px; padding: 4px; }
+  .tab {
+    flex: 1; text-align: center; padding: 10px; border-radius: 8px; cursor: pointer;
+    font-size: 14px; font-weight: 500; color: #94a3b8; transition: all 0.2s;
+  }
+  .tab:hover { color: #e2e8f0; }
+  .tab.active { background: #3b82f6; color: #fff; }
+  .tab .badge { display: inline-block; font-size: 11px; margin-left: 4px; background: rgba(255,255,255,0.15); padding: 1px 6px; border-radius: 10px; }
+  .tab .check { color: #4ade80; margin-left: 2px; }
+
+  /* Practice */
+  .practice-box {
+    background: #1a2744; border: 1px solid #2563eb; border-radius: 14px;
+    padding: 24px; margin-bottom: 16px; text-align: center;
+  }
+  .practice-box .title { font-size: 14px; font-weight: 600; color: #60a5fa; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+  .practice-box .script {
+    background: #0f172a; border-radius: 8px; padding: 14px 16px; margin: 14px 0;
+    font-size: 14px; color: #fbbf24; line-height: 1.6; text-align: left; font-style: italic;
+  }
+  .practice-box .step-label { font-size: 13px; color: #94a3b8; margin-bottom: 12px; }
+  .practice-box .attempt-info { font-size: 12px; color: #64748b; margin-top: 8px; }
+
+  .practice-btns { display: flex; gap: 8px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+  .practice-btn {
+    padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer;
+    font-size: 13px; font-weight: 600; transition: all 0.15s;
+  }
+  .practice-btn.next { background: #22c55e; color: #fff; }
+  .practice-btn.next:hover { background: #16a34a; }
+  .practice-btn.retry { background: #334155; color: #94a3b8; }
+  .practice-btn.retry:hover { background: #475569; color: #e2e8f0; }
+  .practice-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  /* Now playing */
+  .now-playing {
+    background: #1e293b; border-radius: 14px; padding: 28px 24px;
+    text-align: center; margin-bottom: 16px; border: 1px solid #334155;
+  }
+  .now-playing.done { border-color: #22c55e; background: #0f2a1a; }
+  .level-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px; }
+  .trial-label { font-size: 32px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
+  .span-label { font-size: 14px; color: #94a3b8; margin-bottom: 20px; }
+
+  .play-btn {
+    width: 80px; height: 80px; border-radius: 50%; background: #3b82f6; border: none;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s;
+  }
+  .play-btn:hover { background: #2563eb; transform: scale(1.05); }
+  .play-btn:active { transform: scale(0.95); }
+  .play-btn:disabled { background: #334155; cursor: not-allowed; transform: none; }
+  .play-btn svg { width: 32px; height: 32px; fill: #fff; }
+  .play-hint { font-size: 12px; color: #64748b; margin-top: 10px; }
+
+  .sequence-reveal { margin-top: 16px; padding-top: 14px; border-top: 1px solid #334155; }
+  .seq-toggle { font-size: 12px; color: #64748b; cursor: pointer; background: none; border: none; text-decoration: underline; }
+  .seq-digits { font-size: 28px; font-weight: 600; letter-spacing: 8px; color: #fbbf24; margin-top: 8px; font-family: 'Courier New', monospace; }
+  .seq-words { font-size: 13px; color: #94a3b8; margin-top: 4px; }
+
+  .score-row { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
+  .score-btn {
+    padding: 10px 28px; border-radius: 10px; border: 2px solid;
+    font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.15s; background: transparent;
+  }
+  .score-btn.correct { border-color: #22c55e; color: #22c55e; }
+  .score-btn.correct:hover { background: #22c55e; color: #fff; }
+  .score-btn.wrong { border-color: #ef4444; color: #ef4444; }
+  .score-btn.wrong:hover { background: #ef4444; color: #fff; }
+  .score-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .trial-list { margin-top: 12px; }
+  .trial-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-radius: 8px; margin-bottom: 4px; cursor: pointer; transition: background 0.15s;
+  }
+  .trial-item:hover { background: #1e293b; }
+  .trial-item.current { background: #1e293b; border: 1px solid #3b82f6; }
+  .trial-item.scored { opacity: 0.6; }
+  .trial-num { width: 28px; font-size: 13px; color: #64748b; text-align: center; }
+  .trial-info { flex: 1; }
+  .trial-info .top { font-size: 14px; color: #e2e8f0; }
+  .trial-info .bot { font-size: 12px; color: #64748b; }
+  .trial-result {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700;
+  }
+  .trial-result.correct { background: #166534; color: #4ade80; }
+  .trial-result.wrong { background: #7f1d1d; color: #f87171; }
+  .trial-result.pending { background: #334155; color: #64748b; }
+
+  .discontinue {
+    background: #7f1d1d; border: 1px solid #dc2626; border-radius: 10px;
+    padding: 14px 18px; text-align: center; margin: 16px 0; font-size: 14px; color: #fca5a5;
+  }
+
+  .summary { background: #1e293b; border-radius: 14px; padding: 24px; margin-top: 20px; }
+  .summary h3 { font-size: 16px; margin-bottom: 14px; color: #f8fafc; }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .summary-card { background: #0f172a; border-radius: 10px; padding: 16px; text-align: center; }
+  .summary-card .val { font-size: 28px; font-weight: 700; color: #3b82f6; }
+  .summary-card .lbl { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+
+  .kbd-hint { text-align: center; margin-top: 12px; font-size: 11px; color: #475569; }
+  kbd { background: #334155; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px; color: #94a3b8; }
+
+  .btn-row { display: flex; gap: 8px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+  .action-btn { padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; border: none; }
+  .action-btn.save { background: #3b82f6; color: #fff; }
+  .action-btn.save:hover { background: #2563eb; }
+  .action-btn.save:disabled { opacity: 0.3; cursor: not-allowed; }
+  .action-btn.reset { background: #334155; color: #94a3b8; }
+  .action-btn.reset:hover { background: #475569; color: #e2e8f0; }
+
+  .saved-list { margin-top: 16px; }
+  .saved-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px; background: #1e293b; border-radius: 8px; margin-bottom: 4px; font-size: 13px;
+  }
+  .saved-item .pid { color: #f8fafc; font-weight: 600; min-width: 60px; }
+  .saved-item .meta { color: #64748b; flex: 1; margin: 0 8px; }
+  .saved-item .metrics { color: #94a3b8; white-space: nowrap; }
+  .saved-item .del-btn { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; padding: 0 4px; }
+  .saved-item .del-btn:hover { color: #ef4444; }
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+
+<script>
+const DW = {0:"nol",1:"satu",2:"dua",3:"tiga",4:"empat",5:"lima",6:"enam",7:"tujuh",8:"delapan",9:"sembilan"};
+
+const PRACTICE_FW = [[6,4],[8,2]];
+const PRACTICE_BW = [[4,8],[3,1]];
+
+const FORWARD = [
+  [3,7],[5,1],[4,9,2],[6,1,8],[3,8,5,2],[7,1,4,9],
+  [2,9,6,1,3],[5,3,8,4,7],[1,7,3,9,5,2],[8,4,6,1,9,3],
+  [3,5,1,8,6,2,9],[7,2,4,9,1,5,3],
+  [5,9,3,7,1,6,2,8],[4,1,8,3,6,9,5,2]
+];
+const BACKWARD = [
+  [2,5],[6,3],[5,7,4],[2,9,1],[7,3,8,1],[4,6,2,9],
+  [1,8,5,3,6],[9,2,7,4,1],[3,6,9,1,7,4],[5,8,2,4,1,7],
+  [8,1,5,9,3,6,2],[4,7,3,1,8,5,9]
+];
+
+function buildTrials(seqs, prefix) {
+  return seqs.map((seq, i) => ({
+    level: Math.floor(i/2)+1, trial: (i%2)+1, span: seq.length, digits: seq, prefix,
+    file: `digit_span_audio/${prefix}_L${Math.floor(i/2)+1}_T${(i%2)+1}_span${seq.length}.mp3`,
+    result: null
+  }));
+}
+function freshTrials() { return { fw: buildTrials(FORWARD,'FW'), bw: buildTrials(BACKWARD,'BW') }; }
+
+// ==================== STATE ====================
+const saved = [];
+
+const state = {
+  condition: 'FW',
+  ...freshTrials(),
+  currentIdx: 0,
+  playing: false, played: false, showSeq: false, discontinued: false,
+  participant: '', participantName: '', enumerator: '',
+  // Practice state
+  phase: 'practice',   // 'practice' | 'test'
+  practiceStep: 0,      // 0 = instruction/demo, 1 = child tries #1, 2 = child tries #2
+  practiceAttempt: 0,    // how many times practice has been repeated (max 2)
+  practicePlayed: false,
+  fwPracticeDone: false,
+  bwPracticeDone: false
+};
+
+let audio = null;
+
+function trials() { return state.condition === 'FW' ? state.fw : state.bw; }
+function current() { return trials()[state.currentIdx]; }
+
+function getSpan(tl) {
+  let span = 0;
+  for (let l = 1; l <= Math.max(...tl.map(t=>t.level)); l++) {
+    if (tl.filter(t=>t.level===l).some(t=>t.result==='correct')) span = tl.find(t=>t.level===l).span;
+  }
+  return span;
+}
+function getRaw(tl) { return tl.filter(t => t.result === 'correct').length; }
+
+function checkDiscontinue() {
+  const t = trials(); const cur = t[state.currentIdx]; if (!cur) return false;
+  const lt = t.filter(x => x.level === cur.level);
+  if (lt.length===2 && lt.every(x => x.result==='wrong')) return true;
+  if (cur.level > 1) {
+    const prev = t.filter(x => x.level === cur.level-1);
+    if (prev.length===2 && prev.every(x => x.result==='wrong')) return true;
+  }
+  return false;
+}
+
+function hasData() { return state.fw.some(t=>t.result!==null) || state.bw.some(t=>t.result!==null); }
+function practiceDone() { return state.condition==='FW' ? state.fwPracticeDone : state.bwPracticeDone; }
+
+// ==================== PRACTICE ====================
+function getPracticeSeqs() { return state.condition === 'FW' ? PRACTICE_FW : PRACTICE_BW; }
+function getPracticeFile(idx) {
+  const prefix = state.condition === 'FW' ? 'PFW' : 'PBW';
+  const seq = getPracticeSeqs()[idx];
+  return `digit_span_audio/${prefix}_T${idx+1}_span${seq.length}.mp3`;
+}
+
+function playPractice(idx) {
+  if (state.playing) return;
+  if (audio) { audio.pause(); audio = null; }
+  const file = getPracticeFile(idx);
+  audio = new Audio(file);
+  state.playing = true; state.practicePlayed = false; render();
+  audio.onended = () => { state.playing = false; state.practicePlayed = true; render(); };
+  audio.onerror = () => {
+    state.playing = false;
+    alert(`File tidak ditemukan: ${file}\nJalankan ulang generate_digit_span.py untuk generate file practice.`);
+    render();
+  };
+  audio.play();
+}
+
+function practiceNext() {
+  if (state.practiceStep < 1) {
+    // Move from demo to child try
+    state.practiceStep = 1;
+    state.practicePlayed = false;
+  } else {
+    // Practice done for this condition
+    if (state.condition === 'FW') state.fwPracticeDone = true;
+    else state.bwPracticeDone = true;
+    state.phase = 'test';
+    state.practiceStep = 0;
+    state.practiceAttempt = 0;
+    state.practicePlayed = false;
+  }
+  render();
+}
+
+function practiceRetry() {
+  state.practiceAttempt++;
+  state.practiceStep = 0;
+  state.practicePlayed = false;
+  render();
+}
+
+// ==================== TEST ACTIONS ====================
+function play() {
+  const t = current(); if (!t || state.playing) return;
+  if (audio) { audio.pause(); audio = null; }
+  audio = new Audio(t.file);
+  state.playing = true; state.played = false; render();
+  audio.onended = () => { state.playing = false; state.played = true; render(); };
+  audio.onerror = () => {
+    state.playing = false;
+    alert(`File tidak ditemukan: ${t.file}\nPastikan folder digit_span_audio/ ada.`);
+    render();
+  };
+  audio.play();
+}
+
+function score(result) {
+  current().result = result;
+  state.played = false; state.showSeq = false;
+  if (checkDiscontinue()) { state.discontinued = true; render(); return; }
+  if (state.currentIdx < trials().length - 1) state.currentIdx++;
+  render();
+}
+
+function switchCondition(c) {
+  if (audio) { audio.pause(); audio = null; }
+  state.condition = c; state.currentIdx = 0;
+  state.playing = false; state.played = false; state.showSeq = false;
+  state.discontinued = false;
+  // Check if practice needed
+  const done = c === 'FW' ? state.fwPracticeDone : state.bwPracticeDone;
+  state.phase = done ? 'test' : 'practice';
+  state.practiceStep = 0; state.practiceAttempt = 0; state.practicePlayed = false;
+  render();
+}
+
+function goToTrial(idx) {
+  if (audio) { audio.pause(); audio = null; }
+  state.currentIdx = idx; state.playing = false;
+  state.played = false; state.showSeq = false; state.discontinued = false; render();
+}
+
+function saveParticipant() {
+  if (!state.participant.trim()) { alert('Isi kode partisipan.'); return; }
+  if (!hasData()) { alert('Belum ada data.'); return; }
+  saved.push({
+    kode: state.participant.trim(), nama: state.participantName.trim(),
+    enumerator: state.enumerator.trim(),
+    tanggal: new Date().toISOString().slice(0,10),
+    waktu: new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
+    fwSpan: getSpan(state.fw), fwRaw: getRaw(state.fw),
+    bwSpan: getSpan(state.bw), bwRaw: getRaw(state.bw),
+    totalSpan: getSpan(state.fw)+getSpan(state.bw), totalRaw: getRaw(state.fw)+getRaw(state.bw),
+    trialsFW: state.fw.map(t=>({...t})), trialsBW: state.bw.map(t=>({...t}))
+  });
+  const en = state.enumerator;
+  Object.assign(state, {
+    condition:'FW', ...freshTrials(), currentIdx:0,
+    playing:false, played:false, showSeq:false, discontinued:false,
+    participant:'', participantName:'', enumerator:en,
+    phase:'practice', practiceStep:0, practiceAttempt:0, practicePlayed:false,
+    fwPracticeDone:false, bwPracticeDone:false
+  });
+  if (audio) { audio.pause(); audio = null; }
+  render();
+}
+
+function deleteSaved(idx) {
+  if (!confirm(`Hapus data ${saved[idx].kode}?`)) return;
+  saved.splice(idx,1); render();
+}
+
+function resetCurrent() {
+  if (hasData() && !confirm('Reset skor partisipan saat ini?')) return;
+  const en = state.enumerator;
+  Object.assign(state, {
+    condition:'FW', ...freshTrials(), currentIdx:0,
+    playing:false, played:false, showSeq:false, discontinued:false,
+    participant:'', participantName:'', enumerator:en,
+    phase:'practice', practiceStep:0, practiceAttempt:0, practicePlayed:false,
+    fwPracticeDone:false, bwPracticeDone:false
+  });
+  if (audio) { audio.pause(); audio = null; }
+  render();
+}
+
+function exportXLSX() {
+  if (saved.length===0) { alert('Belum ada data.'); return; }
+  const today = new Date().toISOString().slice(0,10);
+  const wb = XLSX.utils.book_new();
+
+  const ws1 = XLSX.utils.json_to_sheet(saved.map(p => ({
+    'Kode':p.kode, 'Nama':p.nama, 'Tanggal':p.tanggal, 'Waktu':p.waktu,
+    'Enumerator':p.enumerator, 'FW_Span':p.fwSpan, 'FW_Raw':p.fwRaw,
+    'BW_Span':p.bwSpan, 'BW_Raw':p.bwRaw, 'Total_Span':p.totalSpan, 'Total_Raw':p.totalRaw
+  })));
+  ws1['!cols'] = [{wch:14},{wch:20},{wch:12},{wch:8},{wch:18},{wch:10},{wch:9},{wch:10},{wch:9},{wch:12},{wch:11}];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Metrik');
+
+  const detail = [];
+  saved.forEach(p => {
+    [['Forward',p.trialsFW],['Backward',p.trialsBW]].forEach(([cond,trs]) => {
+      trs.forEach(t => {
+        if (t.result===null) return;
+        detail.push({ 'Kode':p.kode, 'Nama':p.nama, 'Tanggal':p.tanggal,
+          'Enumerator':p.enumerator, 'Kondisi':cond, 'Level':t.level,
+          'Trial':t.trial, 'Span':t.span, 'Deretan':t.digits.join(' - '),
+          'Skor': t.result==='correct' ? 1 : 0 });
+      });
+    });
+  });
+  const ws2 = XLSX.utils.json_to_sheet(detail);
+  ws2['!cols'] = [{wch:14},{wch:20},{wch:12},{wch:18},{wch:10},{wch:6},{wch:6},{wch:6},{wch:30},{wch:6}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Trial Detail');
+
+  XLSX.writeFile(wb, `DigitSpan_${today}_n${saved.length}.xlsx`);
+}
+
+// ==================== RENDER ====================
+function render() {
+  const t = trials();
+  const c = current();
+  const allDone = t.every(x => x.result !== null) || state.discontinued;
+  const fwScored = state.fw.filter(x => x.result !== null).length;
+  const bwScored = state.bw.filter(x => x.result !== null).length;
+  const canSave = hasData() && state.participant.trim();
+  const isFW = state.condition === 'FW';
+
+  let html = `
+    <div class="header">
+      <h1>Digit Span Test</h1>
+      <div class="sub">Administrator Interface — Lampiran F</div>
+    </div>
+    <div class="counter-bar">
+      <div class="left">Tersimpan: <span class="count">${saved.length}</span> partisipan</div>
+      <button class="export-sm" onclick="exportXLSX()" ${saved.length===0?'disabled':''}>📥 Export .xlsx</button>
+    </div>
+    <div class="instructions">
+      <details>
+        <summary>📋 Petunjuk Enumerator</summary>
+        <br>1. Isi kode & nama partisipan.<br>
+        2. Bacakan instruksi latihan, lalu mulai practice (maks 2× ulang).<br>
+        3. Setelah anak paham → masuk trial. <kbd>Space</kbd> play, <kbd>←</kbd> benar, <kbd>→</kbd> salah.<br>
+        4. Kedua trial salah di satu level → discontinue otomatis.<br>
+        5. Selesai Forward → tab Backward (latihan lagi, lalu trial).<br>
+        6. <b>"Simpan & Lanjut"</b> → reset untuk partisipan berikutnya.<br>
+        7. Akhir sesi → <b>"Export .xlsx"</b> (1 file semua partisipan).
+      </details>
+    </div>
+    <div class="info-bar">
+      <label>Kode:</label>
+      <input type="text" placeholder="Mis. P001" value="${state.participant}" oninput="state.participant=this.value">
+      <label>Nama:</label>
+      <input type="text" placeholder="Nama/inisial anak" value="${state.participantName}" oninput="state.participantName=this.value">
+      <label>Enumerator:</label>
+      <input type="text" placeholder="Nama enumerator" value="${state.enumerator}" oninput="state.enumerator=this.value">
+    </div>
+    <div class="tabs">
+      <div class="tab ${isFW?'active':''}" onclick="switchCondition('FW')">
+        Forward <span class="badge">${fwScored}/${state.fw.length}</span>
+        ${state.fwPracticeDone && fwScored>0 ? '<span class="check">✓</span>' : ''}
+      </div>
+      <div class="tab ${!isFW?'active':''}" onclick="switchCondition('BW')">
+        Backward <span class="badge">${bwScored}/${state.bw.length}</span>
+        ${state.bwPracticeDone && bwScored>0 ? '<span class="check">✓</span>' : ''}
+      </div>
+    </div>`;
+
+  // ===== PRACTICE PHASE =====
+  if (state.phase === 'practice') {
+    const seqs = getPracticeSeqs();
+    const condLabel = isFW ? 'Forward' : 'Backward';
+    const maxRetry = 2;
+
+    if (state.practiceStep === 0) {
+      // Step 1: Instruction + Demo
+      const scriptText = isFW
+        ? `"Kakak akan menyebutkan angka-angka. Dengarkan baik-baik, lalu adik ulangi dengan urutan yang sama ya.
+Contoh: Kakak bilang ${seqs[0].join(' - ')}, adik jawab ${seqs[0].join(' - ')}.
+Kita coba dulu ya."`
+        : `"Sekarang agak berbeda. Adik ulangi angka-angka dari belakang ke depan ya.
+Contoh: Kakak bilang ${seqs[0].join(' - ')}, adik jawab ${[...seqs[0]].reverse().join(' - ')}.
+Kita coba dulu ya."`;
+
+      html += `
+        <div class="practice-box">
+          <div class="title">Latihan ${condLabel}</div>
+          <div class="script">${scriptText}</div>
+          <div class="step-label">Langkah 1: Bacakan instruksi di atas, lalu putar audio demo</div>
+          <button class="play-btn" onclick="playPractice(0)" ${state.playing?'disabled':''}>
+            <svg viewBox="0 0 24 24">${state.playing
+              ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+              : '<polygon points="5,3 19,12 5,21"/>'}</svg>
+          </button>
+          <div class="play-hint">${state.playing ? 'Memutar...' : state.practicePlayed ? 'Audio selesai' : 'Putar demo: ' + seqs[0].join(' - ')}</div>
+          <div class="seq-digits" style="margin-top:14px">${seqs[0].join('  ')}</div>
+          <div class="seq-words">${isFW ? 'Jawaban benar: ' + seqs[0].join(' - ') : 'Jawaban benar: ' + [...seqs[0]].reverse().join(' - ')}</div>
+          <div class="practice-btns">
+            <button class="practice-btn next" onclick="practiceNext()" ${!state.practicePlayed?'disabled':''}>
+              Lanjut → Anak Coba
+            </button>
+          </div>
+        </div>`;
+
+    } else {
+      // Step 2: Child tries with second practice sequence
+      html += `
+        <div class="practice-box">
+          <div class="title">Latihan ${condLabel} — Anak Coba</div>
+          <div class="step-label">Putar audio, lalu dengarkan jawaban anak</div>
+          <button class="play-btn" onclick="playPractice(1)" ${state.playing?'disabled':''}>
+            <svg viewBox="0 0 24 24">${state.playing
+              ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+              : '<polygon points="5,3 19,12 5,21"/>'}</svg>
+          </button>
+          <div class="play-hint">${state.playing ? 'Memutar...' : state.practicePlayed ? 'Audio selesai — cek jawaban anak' : 'Putar: ' + seqs[1].join(' - ')}</div>
+          <div class="seq-digits" style="margin-top:14px">${seqs[1].join('  ')}</div>
+          <div class="seq-words">${isFW ? 'Jawaban benar: ' + seqs[1].join(' - ') : 'Jawaban benar: ' + [...seqs[1]].reverse().join(' - ')}</div>
+          <div class="practice-btns">
+            <button class="practice-btn next" onclick="practiceNext()" ${!state.practicePlayed?'disabled':''}>
+              ✓ Anak Paham → Mulai Test
+            </button>
+            <button class="practice-btn retry" onclick="practiceRetry()"
+              ${state.practiceAttempt >= maxRetry ? 'disabled' : ''}>
+              ↻ Ulangi Latihan (${maxRetry - state.practiceAttempt}× lagi)
+            </button>
+          </div>
+          <div class="attempt-info">Percobaan latihan: ${state.practiceAttempt + 1} dari ${maxRetry + 1}</div>
+        </div>`;
+    }
+
+  // ===== TEST PHASE =====
+  } else {
+
+    if (state.discontinued) {
+      html += `<div class="discontinue">⛔ DISCONTINUE — Kedua trial di level ini salah.</div>`;
+    }
+
+    if (allDone) {
+      const span = getSpan(t); const raw = getRaw(t);
+      const label = isFW ? 'Forward' : 'Backward';
+      html += `
+        <div class="summary">
+          <h3>Hasil ${label}</h3>
+          <div class="summary-grid">
+            <div class="summary-card"><div class="val">${span}</div><div class="lbl">Span</div></div>
+            <div class="summary-card"><div class="val">${raw}</div><div class="lbl">Raw Score</div></div>
+          </div>
+        </div>`;
+    }
+
+    if (c && !allDone) {
+      html += `
+      <div class="now-playing">
+        <div class="level-label">Level ${c.level} — Trial ${c.trial}</div>
+        <div class="trial-label">Span ${c.span}</div>
+        <div class="span-label">${c.span} digit</div>
+        <button class="play-btn" onclick="play()" ${state.playing?'disabled':''}>
+          <svg viewBox="0 0 24 24">${state.playing
+            ? '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
+            : '<polygon points="5,3 19,12 5,21"/>'}</svg>
+        </button>
+        <div class="play-hint">${state.playing ? 'Memutar...' : state.played ? 'Selesai — skor di bawah' : 'Tekan untuk memutar'}</div>
+        <div class="sequence-reveal">
+          <button class="seq-toggle" onclick="state.showSeq=!state.showSeq;render()">
+            ${state.showSeq ? 'Sembunyikan kunci' : 'Lihat kunci jawaban'}
+          </button>
+          ${state.showSeq ? `
+            <div class="seq-digits">${c.digits.join('  ')}</div>
+            <div class="seq-words">${c.digits.map(d=>DW[d]).join(' — ')}</div>
+          ` : ''}
+        </div>
+        <div class="score-row">
+          <button class="score-btn correct" onclick="score('correct')"
+            ${!state.played && c.result===null ? 'disabled' : ''}>✓ Benar</button>
+          <button class="score-btn wrong" onclick="score('wrong')"
+            ${!state.played && c.result===null ? 'disabled' : ''}>✗ Salah</button>
+        </div>
+      </div>`;
+    }
+
+    html += `<div class="trial-list">`;
+    t.forEach((tr, idx) => {
+      const isCur = idx===state.currentIdx && !allDone;
+      const res = tr.result;
+      html += `
+        <div class="trial-item ${isCur?'current':''} ${res?'scored':''}" onclick="goToTrial(${idx})">
+          <div class="trial-num">${idx+1}</div>
+          <div class="trial-info">
+            <div class="top">Level ${tr.level}, Trial ${tr.trial}</div>
+            <div class="bot">Span ${tr.span} — ${tr.digits.join(' - ')}</div>
+          </div>
+          <div class="trial-result ${res||'pending'}">
+            ${res==='correct'?'✓':res==='wrong'?'✗':'·'}
+          </div>
+        </div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `
+    <div class="kbd-hint"><kbd>Space</kbd> Play &nbsp; <kbd>←</kbd> Benar &nbsp; <kbd>→</kbd> Salah</div>
+    <div class="btn-row">
+      <button class="action-btn reset" onclick="resetCurrent()">Reset</button>
+      <button class="action-btn save" onclick="saveParticipant()" ${!canSave?'disabled':''}>💾 Simpan & Lanjut</button>
+    </div>`;
+
+  if (saved.length > 0) {
+    html += `<div class="saved-list">`;
+    saved.forEach((p,i) => {
+      html += `
+        <div class="saved-item">
+          <span class="pid">${p.kode}</span>
+          <span class="meta">${p.nama||'-'}</span>
+          <span class="metrics">FW:${p.fwSpan}/${p.fwRaw} BW:${p.bwSpan}/${p.bwRaw} T:${p.totalSpan}/${p.totalRaw}</span>
+          <button class="del-btn" onclick="deleteSaved(${i})" title="Hapus">×</button>
+        </div>`;
+    });
+    html += `</div>`;
+  }
+
+  document.getElementById('app').innerHTML = html;
+}
+
+window.addEventListener('beforeunload', e => {
+  if (hasData() || saved.length > 0) { e.preventDefault(); e.returnValue = ''; }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); state.phase==='practice' ? null : play(); }
+  if (state.phase === 'test') {
+    if (e.code === 'ArrowLeft' && state.played) score('correct');
+    if (e.code === 'ArrowRight' && state.played) score('wrong');
+  }
+});
+
+render();
+</script>
+</body>
+</html>

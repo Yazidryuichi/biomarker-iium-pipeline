@@ -33,6 +33,9 @@ biomarker-iium-pipeline/
 ├── .github/workflows/ci.yml    CI (kept from main; paths need repointing)
 ├── requirements.lock           pinned deps (kept from main)
 ├── data/                       EDF/ and Behavioral/ (gitignored)
+├── instruments/                the tasks that produce the behavioural data
+│   ├── flanker/                PsychoPy Eriksen Flanker + cleaning notebooks
+│   └── digit_span/             browser Digit Span admin tool + TTS stimuli
 ├── preprocessing/              Stage 1  (pipeline)
 ├── validation/                 Stage 2  (pipeline)
 ├── feature_building/           Stage 3  (pipeline)
@@ -54,6 +57,25 @@ biomarker-iium-pipeline/
   (2026-07-27). A public repo without a licence, without CI, and without a
   dependency pin is a regression, and none of the three competes with the
   flat-stage design. Do not delete them as "root clutter".
+- `instruments/` is the fourth exception (added 2026-07-27). It is NOT a
+  pipeline stage and does not follow the three-thing stage layout — it holds
+  the measurement tools themselves (Flanker task, Digit Span admin app), which
+  produce the behavioural data the pipeline consumes. Each instrument keeps
+  its own `CLAUDE.md`. Do not fold them into a stage, and do not add a stage
+  that imports from them.
+
+**`instruments/` publishes the task, never the responses.** Every instrument
+folder holds its own participant data alongside its code, and all of it is
+gitignored: Flanker `data/`, `cleaned/`, `psychopy_env/`; Digit Span `output/`
+and `saved_page/`. This is not optional tidiness — Flanker filenames and their
+`participant` column carry children's given names, the cleaned exports key rows
+by name instead of by code, the Digit Span workbooks carry the `Kode -> Nama`
+mapping that de-anonymises the whole EEG dataset, and `saved_page/` was saved
+mid-session with seven names rendered into it. Before committing anything new
+under `instruments/`, run `git add -An instruments` and grep the resulting file
+list for participant names. Notebooks are covered by the repo-wide `*.ipynb`
+rule because they store names in their cell outputs; do not add an exception
+without stripping outputs first.
 - `CLAUDE.md` is the only Claude-instruction file allowed at root; do not
   spawn additional `.md` siblings to it.
 - No shared `utils/` or `lib/`. Each stage inlines its own helpers (config

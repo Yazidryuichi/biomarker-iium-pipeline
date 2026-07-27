@@ -20,6 +20,21 @@ Digital_Consent/
 Ethic_Approval_Docs/
 Archives/
 
+# ---- instruments/ : publish the task, never the responses ----
+# The instrument folders hold their own participant data. Flanker CSV/log/psydat
+# filenames contain children's given names, and so does the participant column
+# inside them; the cleaned exports key rows by name rather than by code; the
+# Digit Span workbooks carry the Kode -> Nama mapping. None of it may ship.
+instruments/flanker/data/
+instruments/flanker/cleaned/
+instruments/flanker/cleaned_data/
+instruments/flanker/psychopy_env/
+instruments/digit_span/output/
+# Saved mid-session from the browser: the rendered results table still holds
+# seven children's names. A blank copy of the tool is already tracked as
+# digit_span_admin.html — this one is a session artefact, not an instrument.
+instruments/digit_span/saved_page/
+
 # Stage outputs (regenerable). Each stage writes timestamped runs to
 # <stage>/output/<YYYY-MM-DD_HHMMSS>/. We keep the output/ folder itself
 # tracked (placeholder) but ignore everything inside.
