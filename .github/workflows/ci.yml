@@ -1,0 +1,195 @@
+# ============================================================================
+# STALE AS OF 2026-07-27 — this workflow WILL fail until it is repointed.
+#
+# It was written for the previous repository layout (stages/, utils/,
+# tests/, configs/, run_all.py, generate_figures.py, requirements.txt,
+# Dockerfile). That layout was replaced by the flat per-stage structure
+# described in CLAUDE.md. The workflow is kept, not deleted, because the
+# CI hardening work behind it is worth repointing rather than redoing.
+#
+# To revive: map the job steps onto `python <stage>/main.py`, swap
+# requirements.txt -> requirements.lock, and rebuild the synthetic fixture
+# under the new stage paths. Until then a red build here means "not yet
+# migrated", not "the pipeline is broken".
+# ============================================================================
+name: CI
+
+on:
+  # Auto-triggers disabled while the workflow is stale, so it does not mark
+  # every push red for a reason unrelated to the code. Re-enable the push /
+  # pull_request triggers in the same commit that repoints the paths.
+  workflow_dispatch:
+
+# Cancel in-progress runs on the same ref when new commits arrive. Prevents
+# runaway old runs from holding up feedback on the current commit.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Opt in to Node.js 24 early so we don't get surprised by the June 2 2026 forced
+# switch (when GitHub will force JavaScript actions to Node.js 24 by default).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  test-unit:
+    name: Unit tests (density-matrix invariants) — Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # requirements.lock is pinned for Python 3.12 (uv pip compile output).
+          # On 3.13 some pins may need transitive resolution; use --no-deps + the
+          # range file to let pip pick 3.13-compatible wheels where the lock is
+          # too strict. Falls back cleanly on 3.12.
+          if [ "${{ matrix.python-version }}" = "3.12" ]; then
+            python -m pip install -r requirements.lock
+          else
+            python -m pip install -r requirements.txt
+          fi
+          python -m pip install pytest
+
+      - name: Run unit tests
+        # P2.1d: Stage 5 unit tests added (tests/test_stage5_fair_comparison.py).
+        # P2.3: CNN-LSTM smoke test (Linux-only skip on macOS/Windows).
+        run: python -m pytest tests/test_density_matrix.py tests/test_stage5_fair_comparison.py tests/test_cnn_lstm.py -v
+
+  docker-build:
+    name: Docker image builds cleanly
+    runs-on: ubuntu-latest
+    # Independent of test-unit — fast (~5 min); if Dockerfile breaks, supervisors
+    # trying `make docker` would hit it. Build only; don't push.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: biomarker-iium:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  test-end-to-end:
+    name: End-to-end pipeline against synthetic fixture
+    runs-on: ubuntu-latest
+    needs: test-unit
+    # e2e is the long pole (~12 min). Keep it on the single pinned Python 3.12
+    # against requirements.lock for reproducibility; Python 3.13 compatibility
+    # is covered by the unit-test matrix above.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.lock
+          python -m pip install pytest
+
+      - name: Generate synthetic fixture (small N + short duration for CI smoke test)
+        # N=20 — Stage 5 fair_comparison hardcodes RepeatedStratifiedKFold
+        # (n_splits=10, n_repeats=10), which requires ≥10 samples per class.
+        # 20 subjects → 10 high-EF + 10 low-EF after median split → fits.
+        # N=12 was tried first (cv_folds=5 minimum from config.yaml) but
+        # crashed Stage 6 → Stage 5 with "n_splits=10 cannot be greater
+        # than the number of members in each class".
+        #
+        # --duration 24 — bumped from 20 after P1.1 cleaning.min_epochs
+        # floor (default 10) was breaking Stage 1: at 20 s, mne.make_fixed_
+        # length_events produces 9 non-overlapping 2-s epochs (not 10 — the
+        # boundary epoch [18, 20] is excluded), so every recording landed
+        # below the floor and Stage 1 produced 0 OK recordings, cascading
+        # to KeyError: 'subject_id' in Stage 3. 24 s yields 11-12 epochs,
+        # comfortably above the 10-floor even with 1-2 epoch rejections.
+        # Earlier history: --duration 10 broke Stage 1 (autoreject CV needs
+        # ≥5 surviving epochs, only 4 survived; bad-channel detection over-
+        # rejected making picks=13 < ica.n_components=14). 20 s was viable
+        # before the min_epochs floor. Real-data runs use 30+ s.
+        #
+        # CI is a smoke test ("does the pipeline run without crashing"),
+        # not a statistical run; N=20 × 20 s is still well above the
+        # structural minimum for every downstream stage.
+        run: |
+          python tests/generate_synthetic_fixture.py \
+            --out tests/fixtures/synthetic \
+            --n-subjects 20 \
+            --duration 24 \
+            --seed 42
+
+      - name: Run pipeline end-to-end on fixture
+        # set -o pipefail so a non-zero exit from python propagates through tail
+        # (without it, tail returns 0 and masks pipeline failures as ✓).
+        # SKIP_SHAP=1: SHAP tree explainer can stall on synthetic-fixture
+        # inputs (observed 40+ min hang at Stage 4C with shap==0.49.1 on the
+        # 28-subject gaussian-noise fixture). Real-data runs do not set this.
+        # SKIP_STAGE5=1: Stage 5 fair_comparison is post-hoc statistical
+        # analysis (4 cells × 100-fold CV × 1000-permutation × 10000-bootstrap
+        # ≈ 1+ hour at N=20). It tests statistical inference, not pipeline
+        # correctness. The previous N=20 × 30 s run was cancelled at 1h21m
+        # almost entirely inside Stage 5. Skipping here keeps CI a smoke test;
+        # real-data runs always execute Stage 5.
+        env:
+          SKIP_SHAP: '1'
+          SKIP_STAGE5: '1'
+        run: |
+          set -o pipefail
+          python run_all.py --config tests/fixtures/synthetic/config.fixture.yaml \
+            2>&1 | tail -200
+
+      - name: Regenerate figures from Stage 5 output
+        # generate_figures.py requires stage5_fair_comparison.json (all
+        # 3 figures it produces depend on Stage 5 outputs). When SKIP_STAGE5=1
+        # that file is absent by design — skip the figure step too rather
+        # than failing CI. Real-data runs always have Stage 5 outputs.
+        run: |
+          if [ -f tests/fixtures/synthetic/results/stage5_fair_comparison.json ]; then
+            python generate_figures.py \
+              --results-dir tests/fixtures/synthetic/results \
+              --out-dir tests/fixtures/synthetic/figures
+          else
+            echo "stage5_fair_comparison.json absent (Stage 5 was skipped); skipping figure regeneration."
+          fi
+
+      - name: Upload figures as artifact
+        uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: ci-figures
+          path: tests/fixtures/synthetic/figures/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload results JSON as artifact
+        uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: ci-results
+          path: tests/fixtures/synthetic/results/*.json
+          if-no-files-found: warn
+          retention-days: 14

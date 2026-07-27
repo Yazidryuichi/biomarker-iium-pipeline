@@ -28,7 +28,10 @@ See `README.md` for the user-facing summary.
 biomarker-iium-pipeline/
 ├── README.md
 ├── CLAUDE.md
+├── LICENSE                     MIT (kept from the pre-restructure main branch)
 ├── .gitignore
+├── .github/workflows/ci.yml    CI (kept from main; paths need repointing)
+├── requirements.lock           pinned deps (kept from main)
 ├── data/                       EDF/ and Behavioral/ (gitignored)
 ├── preprocessing/              Stage 1  (pipeline)
 ├── validation/                 Stage 2  (pipeline)
@@ -46,6 +49,11 @@ biomarker-iium-pipeline/
   `Makefile`, `pyproject.toml`, `requirements.txt`, `utils/`, `scripts/`,
   `tests/`, `docs/`, `configs/`, `figures/`, `logs/`, `results/`,
   `notebooks/`, `pipeline.py`, etc.
+- `LICENSE`, `.github/`, and `requirements.lock` are the three deliberate
+  exceptions, carried over when this layout replaced the old one on `main`
+  (2026-07-27). A public repo without a licence, without CI, and without a
+  dependency pin is a regression, and none of the three competes with the
+  flat-stage design. Do not delete them as "root clutter".
 - `CLAUDE.md` is the only Claude-instruction file allowed at root; do not
   spawn additional `.md` siblings to it.
 - No shared `utils/` or `lib/`. Each stage inlines its own helpers (config

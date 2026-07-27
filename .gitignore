@@ -1,12 +1,24 @@
 # ============================================================
 # CRITICAL: Patient data must NEVER be committed
 # ============================================================
+# EDF files carry children's full names in their filenames, and the Digit Span
+# workbooks carry a Kode -> Nama mapping that de-anonymises the whole dataset.
 data/*.edf
 data/*.xlsx
 data/*.csv
 data/**/*.edf
 data/Behavioral/
 data/EDF/
+data/EDF19/
+
+# Raw data / consent / ethics directories (carried over from the pre-restructure
+# main branch — kept because the risk they guard against has not changed).
+EF_Biomarker/
+EDF_Files/
+AUFEI-O/
+Digital_Consent/
+Ethic_Approval_Docs/
+Archives/
 
 # Stage outputs (regenerable). Each stage writes timestamped runs to
 # <stage>/output/<YYYY-MM-DD_HHMMSS>/. We keep the output/ folder itself
@@ -29,15 +41,23 @@ research_report/output/*
 # Heavy artifacts (defensive — same as the per-stage rules above)
 *.fif
 *.npz
+logs/
+results/
+figures/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.eggs/
+dist/
+build/
+*.egg
 .venv/
 venv/
 env/
+catboost_info/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -54,6 +74,8 @@ env/
 .DS_Store
 Thumbs.db
 *.swp
+*.swo
+*.sublime-*
 .vscode/
 .idea/
 .claude/
