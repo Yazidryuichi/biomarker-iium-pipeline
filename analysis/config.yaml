@@ -1,5 +1,7 @@
 paths:
   feature_engineering_root: ./feature_engineering/output
+  preprocessing_root: ./preprocessing/output   # for the affective decoder
+                                               # (reads *_decode-epo.fif)
 
 random_state: 42
 
@@ -14,10 +16,9 @@ params:
   #   BW_Span / Global_EF = secondary working-memory / parent-report
   #   ddm_delta_v / flanker_effect = RETRACTED (do not run live)
   targets:
-    - rt_cv                 # PRIMARY
-    - ddm_v_incongruent     # secondary with n=6 reliability caveat
-    - BW_Span               # secondary
-    - Global_EF             # secondary with AUFEI variance-restriction caveat
+    - rt_cv                 # PRIMARY (RT coefficient of variation)
+    - Global_EF             # parent-report EF, single item-level composite
+                            # (17 items; subscale targets retired per revision)
 
   retracted_targets:        # documented but NOT analysed
     - ddm_delta_v
@@ -51,6 +52,64 @@ params:
       - fm_theta_eo_periodic
       - posterior_alpha_ec_periodic
       - tbr_frontal_eo_log_periodic
+    iaps_va:
+      # PRIMARY IAPS set: 8 emotion features under the WITHIN-FILE baseline
+      # (response minus last-15 s block tail). Predict the same EF targets.
+      # H/C/S/F = Happy/Calm/Sad/Fear; v/a = valence (frontal alpha asymmetry)
+      # / arousal (beta/alpha).
+      - iaps_Hv
+      - iaps_Ha
+      - iaps_Cv
+      - iaps_Ca
+      - iaps_Sv
+      - iaps_Sa
+      - iaps_Fv
+      - iaps_Fa
+    iaps_va_eo:
+      # SENSITIVITY IAPS set: same 8 features under the Eyes_Open baseline.
+      # Compared against iaps_va for ranking/sign robustness (see
+      # iaps_baseline_consistency output).
+      - iaps_eo_Hv
+      - iaps_eo_Ha
+      - iaps_eo_Cv
+      - iaps_eo_Ca
+      - iaps_eo_Sv
+      - iaps_eo_Sa
+      - iaps_eo_Fv
+      - iaps_eo_Fa
+
+  # Which feature_sets the confirmatory OLS loop runs. null / empty = all
+  # defined above. This is the EF-vs-IAPS toggle:
+  #   [a_priori_union]                    -> EF biomarker only
+  #   [iaps_va]                           -> IAPS (within baseline) only
+  #   [iaps_va, iaps_va_eo]               -> IAPS both baselines (robustness)
+  #   [a_priori_union, iaps_va, iaps_va_eo] -> everything
+  feature_sets_to_run: [a_priori_union, iaps_va, iaps_va_eo]
+
+  # IAPS baseline-robustness check: compares the two IAPS feature sets
+  # (within-file primary vs EO sensitivity) on the same targets, reporting
+  # Spearman rank agreement of |t| and effect-direction (sign) agreement
+  # across the 8 emotion features. Writes iaps_baseline_consistency.{csv,json}.
+  iaps_baseline_consistency:
+    enable: true
+    primary_set: iaps_va
+    sensitivity_set: iaps_va_eo
+
+  # ──────────────────────────────────────────────────────────────
+  # Univariate scan (one predictor + covariates at a time)
+  # ──────────────────────────────────────────────────────────────
+  # Companion to the block OLS: for each feature in the named set, fit
+  # y ~ covariates + <that one feature> and collect into ONE table per
+  # (target, feature_set). Each feature uses its own complete-case N (no
+  # listwise deletion across the whole block). Multiplicity correction here
+  # is EXPLORATORY in scope (flagged in output) — separate from the
+  # confirmatory within-block correction. Output: output/<ts>/univariate/
+  # univariate_<target>__<set>.csv
+  univariate_scan:
+    enable: true
+    targets: [Global_EF]      # null/omit = same as params.targets
+    feature_sets: [iaps_va]   # null/omit = all feature_sets_to_run
+    correction: fdr_bh        # fdr_bh | bonferroni | none
 
   # Directional priors per composite. Per-target signs are loaded from
   # feature_engineering/output/<latest>/apriori_theory_mapping.csv when
@@ -137,6 +196,63 @@ params:
     # Schemes resolved by feature_engineering; analysis reads
     # feature_selection_schemes_resolved.json. Listed here for visibility.
     schemes_to_run: [theory, data_driven, hybrid]
+
+  # ──────────────────────────────────────────────────────────────
+  # EXPLORATORY: ASM affective decoder (Wahab lineage; decode_IAPS.pdf)
+  # ──────────────────────────────────────────────────────────────
+  # Within-subject 4-emotion (happy/calm/sad/fear) WINDOW classifier built
+  # from the full-block decoder epochs preprocessing emits (*_decode-epo.fif).
+  # Per-window features = band power (abs+rel per band per channel) + KDE
+  # mean/SD per channel (paper: KDE only; we add band power). Classifiers:
+  # MLP (primary, per paper) + LDA (baseline). 5-fold CV WITHIN each subject.
+  #
+  # GUARDRAILS (do not regress): this is WITHIN-SUBJECT window classification,
+  # NOT cross-subject generalization; chance = 25% (4 balanced classes); decode
+  # accuracy is NOT a headline result — it is only the substrate for the
+  # affective-space geometry features (step 3) that will predict EF (step 4).
+  # All outputs are labelled exploratory.
+  affective_decoder:
+    enable: true
+    emotion_conditions: [1_Happy, 2_Calm, 3_Sad, 4_Scare]
+    bands:                       # mirror feature_building bands (duplicated knob)
+      delta: [1, 4]
+      theta: [4, 8]
+      alpha: [8, 13]
+      beta: [13, 30]
+    features: [band_power, kde]  # feature families to include
+    kde_points: 100             # KDE evaluation grid points (paper: 100)
+    cv_folds: 5                 # within-subject StratifiedKFold
+    mlp_hidden: [32]            # MLPClassifier hidden layer sizes
+    mlp_max_iter: 500
+    min_windows_per_class: 5    # skip a subject's class below this
+
+    # Step 3: per-subject affective-space (V-A) geometry from OOF MLP
+    # posteriors projected onto Russell canonical emotion coordinates. These
+    # per-SUBJECT scalars (asm_centroid_offset, asm_sep_centroid,
+    # asm_silhouette, asm_dispersion [+ asm_precursor_offset]) are
+    # cross-subject comparable and are what enters EF prediction — NOT raw
+    # decode labels. Writes affective_geometry.csv.
+    geometry:
+      enable: true
+      precursor_from_ec: true   # also project resting Eyes_Closed windows ->
+                                # precursor centroid offset in the same V-A space
+
+    # Step 4: predict an EF target from the decode-derived features THROUGH the
+    # existing confirmatory OLS path (run_hypothesis_test: age covariate FWL +
+    # block F + bootstrap CI). Unit = subject, so window leakage is structurally
+    # absent. EXPLORATORY — none of these are in the pre-registered a priori union.
+    # Two SEPARATE feature sets (never pooled):
+    #   asm_va       = 8 per-emotion decoded V-A centroids (decode_IAPS.pdf Fig 8):
+    #                  asm_va_{H,C,S,F}{v,a}  (Happy/Calm/Sad/Fear x valence/arousal)
+    #   asm_geometry = the aggregate affective-space geometry scalars (step 3)
+    predict_ef:
+      enable: true
+      target: Global_EF
+      feature_sets: [asm_va, asm_geometry]
+      univariate: true          # also fit y ~ age + ONE feature at a time
+                                # (per-feature complete-case N, FDR/Bonf across
+                                # the scan); written to predict_ef/<set>/univariate/.
+                                # Runs even if the block OLS is underpowered.
 
   # ──────────────────────────────────────────────────────────────
   # Screening index (illustrative output product; ONE pre-spec combo)

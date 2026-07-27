@@ -8,6 +8,8 @@ the source workbook genuinely lacks trial data.
 Outputs (output/<ts>/):
   aufei_subscale_reliability.csv   Cronbach alpha per subscale + interpretation
   aufei_item_total.csv             corrected item-total r + alpha-if-deleted
+  aufei_global_reliability.csv     Cronbach alpha + omega for Global_EF composite
+  aufei_global_item_total.csv      corrected item-total r for the global composite
   flanker_reliability.csv          split-half Spearman-Brown per metric
   digit_span_reliability.csv       FW vs BW split-half (parallel-halves assumption)
   preprocessing_pass_summary.json  N retained after Stage 1 min_epochs floor
@@ -171,6 +173,56 @@ def aufei_reliability(beh_dir, fname, subscales, alpha_min, alpha_pref):
     return (pd.DataFrame(subscale_rows),
             pd.DataFrame(item_rows),
             {"alpha_min_acceptable": alpha_min, "alpha_preferred": alpha_pref})
+
+
+def aufei_global_reliability(beh_dir, fname, subscales, drop_items,
+                             alpha_min, alpha_pref):
+    """Cronbach alpha + omega for the single item-level Global_EF composite.
+
+    Mirrors feature_engineering.load_aufei: the item set is the union of all
+    subscale items minus `drop_items` (NOT a mean of subscale means). This is
+    the reliability of the confirmatory-path composite; per CLAUDE.md report the
+    global alpha/omega, never per-subscale, on the confirmatory path. Does not
+    replace the per-subscale audit above — both are emitted.
+    """
+    path = beh_dir / fname
+    if not path.exists():
+        return None, None, {"error": f"missing {path}"}
+    df = pd.read_excel(path)
+    drop = set(drop_items or [])
+    all_items = [it for items in subscales.values() for it in items]
+    present = [c for c in all_items if c in df.columns and c not in drop]
+    if len(present) < 2:
+        return None, None, {"error": "insufficient global items present"}
+
+    sub = df[present]
+    a, n = cronbach_alpha(sub)
+    w = mcdonald_omega(sub)
+    if not np.isfinite(a):
+        interp = "undefined"
+    elif a >= alpha_pref:
+        interp = "good"
+    elif a >= alpha_min:
+        interp = "marginal"
+    else:
+        interp = "inadequate"
+    global_row = pd.DataFrame([{
+        "composite": "Global_EF",
+        "k_items": len(present),
+        "n_obs": int(n),
+        "alpha": round(a, 3) if np.isfinite(a) else None,
+        "omega": round(w, 3) if np.isfinite(w) else None,
+        "interpretation": interp,
+        "note": "single item-level composite over all retained AUFEI-O items; "
+                "high alpha is partly item-count driven, not strong "
+                "unidimensionality (see CLAUDE.md)",
+    }])
+    item_rows = item_total_diagnostics(sub)
+    for r in item_rows:
+        r["composite"] = "Global_EF"
+    return (global_row, pd.DataFrame(item_rows),
+            {"items_used": present, "n_items": len(present),
+             "n_dropped": len(set(all_items) - set(present))})
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -414,6 +466,25 @@ def main():
         print(f"  ERROR: {aufei_meta}")
         headline["aufei"] = {"error": str(aufei_meta)}
 
+    # AUFEI — Global_EF composite reliability (confirmatory-path composite)
+    print("\n--- AUFEI Global_EF reliability (all retained items) ---")
+    gef_df, gef_items, gef_meta = aufei_global_reliability(
+        beh_dir, p["aufei_filename"], p["aufei_subscales"],
+        p.get("aufei_drop_items", []),
+        float(p["alpha_min_acceptable"]), float(p["alpha_preferred"]))
+    if gef_df is not None:
+        gef_df.to_csv(out_dir / "aufei_global_reliability.csv", index=False)
+        gef_items.to_csv(out_dir / "aufei_global_item_total.csv", index=False)
+        print(gef_df.to_string(index=False))
+        print(f"  {gef_meta}")
+        headline["aufei_global"] = {
+            "composite": gef_df.to_dict(orient="records")[0],
+            **gef_meta,
+        }
+    else:
+        print(f"  ERROR: {gef_meta}")
+        headline["aufei_global"] = {"error": str(gef_meta)}
+
     # Flanker — trial-level split-half (the main fix)
     print("\n--- Flanker split-half reliability (trial-level) ---")
     flank_df, flank_meta = flanker_reliability(
@@ -465,6 +536,7 @@ def main():
         "behavioral_dir": str(beh_dir),
         "preprocessing_consumed": pp_summary.get("preprocessing_run_dir"),
         "outputs": ["aufei_subscale_reliability.csv", "aufei_item_total.csv",
+                    "aufei_global_reliability.csv", "aufei_global_item_total.csv",
                     "flanker_reliability.csv", "digit_span_reliability.csv",
                     "preprocessing_pass_summary.json", "reliability_summary.json"],
     }

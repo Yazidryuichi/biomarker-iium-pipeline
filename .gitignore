@@ -43,6 +43,13 @@ env/
 .ipynb_checkpoints/
 *.ipynb
 
+# Manuscripts, ethics paperwork, journal templates.
+# These carry investigator names, protocol detail, and unpublished findings —
+# they do not belong in the code repository regardless of its visibility.
+*.pdf
+*.docx
+*.doc
+
 # OS / IDE / env
 .DS_Store
 Thumbs.db

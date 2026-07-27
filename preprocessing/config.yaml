@@ -1,11 +1,19 @@
 paths:
-  edf_dir: ./data/EDF
+  edf_dir: ./data/EDF19
   behavioral_dir: ./data/Behavioral
 
 recording:
   sfreq: 250
-  channels: [Fp1, Fp2, F7, F3, Fz, F4, F8, C3, Cz, C4, P3, Pz, P4, O1, O2]
+  # 19-channel 10-20 montage re-exported from the native Mitsar .EEG (full
+  # montage incl. temporals). Modern names after RENAME_OLD_TO_NEW
+  # (T3->T7, T4->T8, T5->P7, T6->P8). Split from full-session EDFs by markers.
+  channels: [Fp1, Fp2, F7, F3, Fz, F4, F8, T7, C3, Cz, C4, T8, P7, P3, Pz, P4, P8, O1, O2]
   conditions: [Eyes_Open, Eyes_Closed]
+  # IAPS affective-viewing files (one EDF per emotion; 4_Scare == "Fear").
+  # Only processed when params.iaps.enable is true. Cleaned with the SAME
+  # ICA/AutoReject path as the resting conditions, then cropped to a short
+  # response window (see params.iaps).
+  emotion_conditions: [1_Happy, 2_Calm, 3_Sad, 4_Scare]
 
 random_state: 42
 
@@ -18,7 +26,7 @@ params:
 
   ica_method: infomax
   ica_extended: true
-  ica_n_components: 14
+  ica_n_components: 18
   iclabel_threshold: 0.7
   iclabel_exclude_labels:
     - eye blink
@@ -36,3 +44,34 @@ params:
   fallback_reject_uv: 150
   max_reject_pct: 0.30
   min_epochs: 60
+
+  # ----- IAPS affective-viewing (emotion) windows -----
+  # Each emotion EDF is cleaned ONCE with the resting ICA/AutoReject path, then
+  # two non-overlapping windows are cropped from it:
+  #   response        first `window_sec` after the emotion onset (fallback 0 s),
+  #                   never before `min_window_start_sec` (filter transient)
+  #                   -> saved as {sid}_{emotion}-epo.fif
+  #   within_baseline last `window_sec` of the block (tail before the next
+  #                   emotion marker) -> saved as {sid}_{emotion}_base-epo.fif
+  # The within-file baseline is the PRIMARY IAPS baseline; Eyes_Open (processed
+  # via the normal resting path) is the sensitivity baseline (see
+  # feature_engineering). Blocks are >= 64 s so the two windows never overlap.
+  iaps:
+    enable: true
+    window_sec: 15.0            # length of BOTH the response and baseline windows
+    skip_after_onset_sec: 0.0   # extra lead-in skipped after the onset marker
+    min_window_start_sec: 5.0   # floor on response start (filter-edge transient)
+    epoch_overlap: 1.0          # seconds of overlap; 2 s epochs, 1 s overlap
+                                # (50%) -> ~14 epochs from a 15 s window
+    min_epochs: 4               # floor for each short window (NOT 60)
+
+    # ----- EXPLORATORY affective decoder (ASM / Wahab lineage) -----
+    # Crops a THIRD window from the same ICA pass: the WHOLE emotion block
+    # (onset -> next-emotion marker), epoched at 2 s / epoch_overlap (50%),
+    # saved as {sid}_{emotion}_decode-epo.fif. Feeds the within-subject
+    # 4-emotion decoder in analysis (affective_decoder). NOT consumed by the
+    # confirmatory feature_building/analysis path. Exploratory only.
+    decode:
+      enable: true
+      epoch_overlap: 1.0        # 2 s epochs, 1 s overlap (50%) -> ~60/block
+      min_epochs: 20            # floor for a usable per-emotion decoder block

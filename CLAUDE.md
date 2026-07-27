@@ -151,7 +151,14 @@ Load-bearing for scientific validity. Do not "simplify" them.
   unmixing W and `ica.apply` share a reference frame, and so ICLabel —
   trained on avg-ref data — classifies in the frame it expects.
   `qc.json` records `source_reference` and `output_reference` for
-  provenance.
+  provenance. The exported EDFs carry 15 channels (Fp1/Fp2, F7/F3/Fz/F4/F8,
+  C3/Cz/C4, P3/Pz/P4, O1/O2); the 4 temporal electrodes (T3/T4/T5/T6) are
+  not in the file (`n_channels_raw = 15`). The acquisition device is
+  nominally 19-channel and the IJP manuscript uses 19-channel framing, but
+  the pipeline only ever processes the 15 exported channels. This does not
+  change the confirmatory analysis: the 9 a priori composites use only
+  Fz/Cz (FC) and O1/O2/Pz (PO), all present. Do not claim 19 channels were
+  analysed; describe composites by their region channels.
 
 - **ICA fit on a 1 Hz HP copy of the avg-referenced raw**; the unmixing
   matrix is then applied to the 0.5 Hz HP avg-ref raw. ICLabel will emit
@@ -203,6 +210,15 @@ Load-bearing for scientific validity. Do not "simplify" them.
   preferred. Composites failing the gate are still computed but should be
   flagged in interpretation.
 
+- **`Global_EF` is a single item-level composite** (mean of all 25 AUFEI-O
+  items). `feature_engineering.load_aufei` builds it from all items minus
+  `aufei_drop_items` (default `[]`). Item screening was evaluated and
+  abandoned — dropping 7 items moved α only 0.81 → 0.80 — so all 25 items
+  are used. Report the global α / ω only (≈ 0.81 / 0.82, n = 28), never
+  per-subscale on the confirmatory path; the high α is item-count-driven,
+  not strong unidimensionality. Per-subscale scores are still emitted for
+  the QC sidecars.
+
 - **Multiplicity correction restricted to pre-specified hypotheses**
   (Bonferroni or FDR-BH across composites within a feature set). Do not
   extend correction scope to exploratory sweeps without flagging the
@@ -218,6 +234,31 @@ Load-bearing for scientific validity. Do not "simplify" them.
   mode); spectra via `m.results.model.modeled_spectrum` and
   `m.results.model._ap_fit`. Old `m.fooofed_spectrum_` /
   `m.aperiodic_params_` attributes are gone in 2.0.
+
+- **IAPS emotion features are optional, dual-baseline (within primary, EO
+  sensitivity)**. The affective-viewing EDFs (`IGS_1_Happy/2_Calm/3_Sad/
+  4_Scare`; Scare = Fear) are separate per-emotion files, NOT annotations in
+  one recording; each runs marker-to-marker (emotion onset ~0 s, next-emotion
+  marker ~1 s before EOF, then `BAD_ACQ_SKIP`). There is NO annotated fixation,
+  so onset detection falls back to 0 s. When `preprocessing.params.iaps.enable`,
+  preprocessing cleans each emotion file ONCE through the resting ICA/AutoReject
+  path (ICA on the full recording) and crops TWO non-overlapping 15 s windows:
+  `response` = first 15 s after onset (transient-safe, `[5,20] s`) saved as
+  `{sid}_{emotion}-epo.fif`; `within_baseline` = last 15 s of the block (tail
+  before the next marker) saved as `{sid}_{emotion}_base-epo.fif`. Low
+  `min_epochs` floor (4). Viability for both windows → `qc.json`.
+  `feature_building` is UNTOUCHED (still `eo`/`ec` only). `feature_engineering`
+  reads those epochs and emits 16 columns: valence = ln(α_F4)−ln(α_F3) (frontal
+  alpha asymmetry), arousal = mean(β)/mean(α) over F3/Fz/F4, as response MINUS
+  baseline under two baselines — **within-file (PRIMARY)** `iaps_{Hv,Ha,Cv,Ca,
+  Sv,Sa,Fv,Fa}` and **Eyes_Open (SENSITIVITY)** `iaps_eo_{...}` (EO from the
+  existing `eo_*` columns). Both predict the SAME EF targets via feature sets
+  `iaps_va` (primary) and `iaps_va_eo` (sensitivity); `analysis.params.
+  feature_sets_to_run` is the EF-vs-IAPS toggle. `analysis` also emits
+  `iaps_baseline_consistency.{csv,json}` — Spearman |t| rank agreement + beta
+  sign agreement of the 8 features across the two baselines (the within-vs-EO
+  robustness check; lives in analysis, not validation, because validation runs
+  before the features exist). Emotion files have the same 15 channels as resting.
 
 - **PAF = spectral centroid first, find_peaks second**. Children's alpha
   is often broad without a sharp peak (Klimesch 1999; Grandy et al. 2013).
@@ -271,12 +312,14 @@ Load-bearing for scientific validity. Do not "simplify" them.
   (no external caseness label exists in pilot). Percentile within-sample
   only — no tier labels.
 
-- **Target ordering by construct-validity independence first**.
+- **Two live OLS targets, construct-validity independence first**.
   Primary = `rt_cv` (construct-valid even when the Flanker is broken;
-  SB = 0.97 on n = 28). NOT `ddm_v_incongruent` (secondary with n = 6
-  caveat). NOT `ddm_delta_v` (retracted; reliability not estimable at
-  this ceiling; difference-score reliability paradox). See
-  `feedback_target_ordering.md` in memory.
+  SB = 0.97 on n = 28). Secondary = `Global_EF` (parent-report EF, single
+  item-level composite; biomarker-null in the pilot). `ddm_v_incongruent`
+  and `BW_Span` are retired from the target list — still computed as
+  columns, but not entered into the OLS. `ddm_delta_v` / `flanker_effect`
+  remain retracted (difference-score reliability paradox; not estimable at
+  the accuracy ceiling). See `feedback_target_ordering.md` in memory.
 
 ## Knob locations
 
@@ -306,6 +349,9 @@ feature_building/config.yaml      bands, coherence_pairs, wavelet*,
                                   band, default 7-13 Hz)
 
 feature_engineering/config.yaml   aufei_subscales (must mirror validation),
+                                  aufei_drop_items[] (items dropped from the
+                                  single item-level Global_EF composite;
+                                  [] = keep all 25 items),
                                   assessment_date, min_matched_n,
                                   tbr_channels, faa_left, faa_right,
                                   posterior_alpha_channels,
@@ -322,7 +368,9 @@ feature_engineering/config.yaml   aufei_subscales (must mirror validation),
                                       collinearity_threshold},
                                     schemes{theory, data_driven, hybrid}}
 
-analysis/config.yaml              targets[] (primary first = rt_cv),
+analysis/config.yaml              targets[] (rt_cv primary + Global_EF
+                                  secondary; ddm_v_incongruent and BW_Span
+                                  retired from the live list),
                                   retracted_targets[] (documented but
                                   not run: ddm_delta_v, flanker_effect),
                                   covariates (default age_months),
@@ -520,7 +568,9 @@ below are likely to persist until the measurement instruments are revised.
   behavioural anchors, or frequency-based items), not just item rewrite.
   A CFA on these data without addressing variance restriction will
   produce a degenerate solution. AUFEI subscales should be treated as
-  construct-invalid until the instrument revision.
+  construct-invalid until the instrument revision; the confirmatory path
+  therefore reports only the single global EF composite (all 25 items,
+  α ≈ 0.81), never the subscales.
 - **Digit Span has no item-level data in the current export.** FW vs BW
   is the only available reliability proxy (SB = 0.46) and the
   parallel-halves assumption is invalid (FW = passive retention,
@@ -535,6 +585,7 @@ below are likely to persist until the measurement instruments are revised.
 - **N reconciliation.** 28 behavioural → 51/52 EEG recordings OK
   (D0000798/Eyes_Closed dropped at 53/105 epochs below `min_epochs`) →
   25 subjects with both EO and EC → 26 merged behavioural ∩ EEG
-  (D0000796 and D0000823 have behavioural but no EDF files) → 25 in the
-  OLS (1 dropped for `age_months` NaN). State these explicitly in any
-  report that quotes N.
+  (D0000796 and D0000823 have behavioural but no usable EDF — both withdrew
+  during data collection) → 25 in the OLS (1 dropped for `age_months` NaN).
+  The IJP manuscript frames this as 28 enrolled, 2 withdrew, 26 analysed.
+  State these explicitly in any report that quotes N.

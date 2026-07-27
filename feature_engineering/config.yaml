@@ -1,6 +1,10 @@
 paths:
   behavioral_dir: ./data/Behavioral
   feature_building_root: ./feature_building/output
+  # Cleaned emotion windows ({sid}_{emotion}-epo.fif) are read straight from
+  # the preprocessing run that feature_building consumed (resolved via its
+  # run_notes.json, falling back to the latest preprocessing output).
+  preprocessing_root: ./preprocessing/output
 
 random_state: 42
 
@@ -12,7 +16,7 @@ params:
   assessment_date: "2026-03-09"
   min_matched_n: 20
 
-  # AUFEI subscale composition. IC3 dropped (ceiling effect, pilot data).
+  # AUFEI subscale composition. IC3 dropped (zero variance, pilot data).
   aufei_subscales:
     WM: [WM1, WM2, WM3, WM4, WM5]
     IC: [IC1, IC2, IC4, IC5]
@@ -20,11 +24,45 @@ params:
     P:  [P1,  P2,  P3,  P4,  P5]
     SF: [SF1, SF2, SF3, SF4, SF5]
 
+  # Global_EF is a single item-level composite (mean of ALL 25 AUFEI-O items).
+  # Item screening was evaluated and abandoned: dropping the 7 items below left
+  # internal consistency essentially unchanged (alpha 0.81 -> 0.80), so the full
+  # 25-item composite is used and only the global alpha is reported (no subscale
+  # scoring on the confirmatory path). Leave empty to keep all items.
+  aufei_drop_items: []
+
   # Math-derived composites
   tbr_channels: [Fz, F3, F4, Cz]
   faa_left: F3
   faa_right: F4
   posterior_alpha_channels: [O1, O2, Pz]
+
+  # ----- IAPS valence/arousal features (8 emotion features x 2 baselines) -----
+  # Per emotion window compute a valence/arousal pair:
+  #   valence = ln(alpha_right) - ln(alpha_left)        (frontal alpha asymmetry)
+  #   arousal = mean(beta) / mean(alpha) over arousal_channels  (beta/alpha)
+  # Expressed as response MINUS baseline under TWO baselines:
+  #   within (PRIMARY)     response - within-file baseline (last 15 s of block;
+  #                        {sid}_{emotion}_base-epo.fif) -> iaps_{Hv,Ha,...,Fa}
+  #   eo (SENSITIVITY)     response - Eyes_Open (eo_* columns) -> iaps_eo_{...}
+  # 16 columns total. H=Happy, C=Calm, S=Sad, F=Fear/4_Scare; v=valence,
+  # a=arousal. The within-baseline vs EO-baseline agreement is checked in the
+  # analysis stage (iaps_baseline_consistency).
+  iaps:
+    enable: true
+    baseline_condition: eo           # EO band powers (eo_* cols) for sensitivity
+    faa_left: F3
+    faa_right: F4
+    arousal_channels: [F3, Fz, F4]   # frontal beta/alpha
+    bands:
+      alpha: [8.0, 13.0]
+      beta:  [13.0, 30.0]
+    # emotion short-code -> preprocessing condition (epoch filename suffix)
+    emotions:
+      H: 1_Happy
+      C: 2_Calm
+      S: 3_Sad
+      F: 4_Scare
 
   # A priori UNION (primary feature set; 9 region-collapsed composites).
   # Channel collapsing reflects 15-ch Mitsar availability:

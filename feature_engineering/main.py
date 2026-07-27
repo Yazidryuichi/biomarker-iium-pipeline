@@ -383,7 +383,15 @@ def compute_age(dob_series, assessment_date):
     })
 
 
-def load_aufei(path, subscales, assessment_date):
+def load_aufei(path, subscales, assessment_date, drop_items=None):
+    """Global_EF is a single item-level composite (mean of all retained items),
+    not a mean of subscale means. Items in `drop_items` are removed from both
+    the global composite and the per-subscale scores. Pre-specified drops in
+    the pilot: WM1, WM5, IC1, IC2, P5, SF2, SF4 (IC3 already excluded from the
+    subscale definitions for zero variance). Per-subscale scores are still
+    emitted for the QC sidecars but the confirmatory path uses Global_EF only.
+    """
+    drop_items = set(drop_items or [])
     df = pd.read_excel(path)
     out = pd.DataFrame({"ID": df["ID"].astype(str).str.strip()})
     if "Sex" in df.columns:
@@ -392,14 +400,20 @@ def load_aufei(path, subscales, assessment_date):
         ages = compute_age(df["DoB"], assessment_date)
         out["age_years"] = ages["age_years"]
         out["age_months"] = ages["age_months"]
-    subscale_cols = []
+
+    # Single item-level global composite over all retained items.
+    all_items = [it for items in subscales.values() for it in items]
+    retained = [c for c in all_items if c in df.columns and c not in drop_items]
+    if retained:
+        out["Global_EF"] = df[retained].apply(
+            pd.to_numeric, errors="coerce").mean(axis=1)
+
+    # Per-subscale scores (dropped items excluded) for the QC sidecars only.
     for name, items in subscales.items():
-        present = [c for c in items if c in df.columns]
+        present = [c for c in items if c in df.columns and c not in drop_items]
         if present:
-            out[f"{name}_score"] = df[present].mean(axis=1)
-            subscale_cols.append(f"{name}_score")
-    if subscale_cols:
-        out["Global_EF"] = out[subscale_cols].mean(axis=1)
+            out[f"{name}_score"] = df[present].apply(
+                pd.to_numeric, errors="coerce").mean(axis=1)
     return out
 
 
@@ -435,7 +449,8 @@ def load_digit_span(path):
 
 def merge_behavioural(features_df, beh_dir, p):
     aufei = load_aufei(beh_dir / p["aufei_filename"],
-                       p["aufei_subscales"], p["assessment_date"])
+                       p["aufei_subscales"], p["assessment_date"],
+                       drop_items=p.get("aufei_drop_items", []))
     flanker = load_flanker(beh_dir / p["flanker_filename"])
     digit = load_digit_span(beh_dir / p["digit_span_filename"])
     print(f"  AUFEI: {len(aufei)} subjects | Flanker: {len(flanker)} | Digit: {len(digit)}")
@@ -464,6 +479,170 @@ def merge_behavioural(features_df, beh_dir, p):
     if extra:
         print(f"  WARN: behavioural without feature match: {sorted(extra)}")
     return merged
+
+
+# ──────────────────────────────────────────────────────────────────
+# IAPS valence/arousal features (8 emotion features)
+# ──────────────────────────────────────────────────────────────────
+
+def _resolve_preproc_dir(fb_dir, preproc_root):
+    """Prefer the exact preprocessing run feature_building consumed (recorded
+    in its run_notes.json); fall back to the latest preprocessing output."""
+    rn = fb_dir / "run_notes.json"
+    if rn.exists():
+        try:
+            consumed = json.load(open(rn)).get("preprocessing_consumed")
+            if consumed and Path(consumed).is_dir():
+                return Path(consumed)
+        except Exception:
+            pass
+    return latest_output(preproc_root)
+
+
+def _emotion_band_power(epochs_path, channels, bands):
+    """Welch band power per requested channel for one cleaned emotion window.
+
+    Returns {ch: {band: power}}; ch maps to None if the channel is absent.
+    Mirrors feature_building's PSD math (np.trapezoid) on a per-window basis —
+    a small inlined helper, per the no-shared-utils convention.
+    """
+    import mne
+    ep = mne.read_epochs(str(epochs_path), verbose=False)
+    psd = ep.compute_psd(method="welch", fmin=1.0, fmax=40.0, verbose=False)
+    mean_psd = psd.get_data().mean(axis=0)          # (n_ch, n_freqs)
+    freqs = psd.freqs
+    chmap = {c: i for i, c in enumerate(ep.ch_names)}
+    out = {}
+    for ch in channels:
+        if ch not in chmap:
+            out[ch] = None
+            continue
+        spec = mean_psd[chmap[ch]]
+        bp = {}
+        for b, (lo, hi) in bands.items():
+            m = (freqs >= lo) & (freqs < hi)
+            bp[b] = float(np.trapezoid(spec[m], freqs[m])) if m.any() else float("nan")
+        out[ch] = bp
+    return out
+
+
+def _va_from_bp(bp, faa_l, faa_r, ar_ch):
+    """(valence, arousal) from a {ch: {band: power}} dict.
+      valence = ln(alpha_right) - ln(alpha_left)              (frontal alpha asym)
+      arousal = mean(beta) / mean(alpha) over arousal_channels  (beta/alpha)
+    Returns (nan, nan) when the FAA channels are unavailable.
+    """
+    if bp is None or bp.get(faa_l) is None or bp.get(faa_r) is None:
+        return float("nan"), float("nan")
+    v = (np.log(bp[faa_r]["alpha"] + 1e-10) - np.log(bp[faa_l]["alpha"] + 1e-10))
+    betas = [bp[c]["beta"] for c in ar_ch if bp.get(c)]
+    alphas = [bp[c]["alpha"] for c in ar_ch if bp.get(c)]
+    a_mean = float(np.nanmean(alphas)) if alphas else float("nan")
+    b_mean = float(np.nanmean(betas)) if betas else float("nan")
+    a = b_mean / a_mean if a_mean and a_mean > 0 else float("nan")
+    return v, a
+
+
+def add_iaps_features(df, p, paths, fb_dir):
+    """Append IAPS valence/arousal features under TWO baselines:
+
+      within (PRIMARY)   response - within-file baseline (last 15 s of the block,
+                         read from {sid}_{emotion}_base-epo.fif)
+                         -> iaps_{Hv,Ha,Cv,Ca,Sv,Sa,Fv,Fa}
+      eo (SENSITIVITY)   response - Eyes_Open baseline (eo_* columns in df)
+                         -> iaps_eo_{Hv,Ha,Cv,Ca,Sv,Sa,Fv,Fa}
+
+    Per window: valence = ln(alpha_F4) - ln(alpha_F3); arousal = beta/alpha over
+    arousal_channels. Subjects with a missing/non-viable response window get NaN
+    for both baselines; a missing within-baseline window leaves only the within
+    pair NaN (the EO pair still computes).
+
+    Returns (df, summary). df is unchanged when iaps.enable is false.
+    """
+    ip = p.get("iaps", {}) or {}
+    if not ip.get("enable", False):
+        return df, {"enabled": False}
+
+    preproc_dir = _resolve_preproc_dir(fb_dir, paths["preprocessing_root"])
+    if preproc_dir is None:
+        print("  IAPS: no preprocessing output found — skipping (NaN cols).")
+        return df, {"enabled": True, "preprocessing_dir": None,
+                    "per_emotion_n": {}, "per_emotion_base_n": {}}
+    epoch_dir = preproc_dir / "cleaned_epochs"
+
+    eo_cond = ip.get("baseline_condition", "eo")
+    faa_l, faa_r = ip["faa_left"], ip["faa_right"]
+    ar_ch = list(ip["arousal_channels"])
+    bands = {k: tuple(v) for k, v in ip["bands"].items()}
+    emotions = dict(ip["emotions"])
+    needed_ch = sorted(set([faa_l, faa_r] + ar_ch))
+
+    df = df.copy()
+
+    # ----- Eyes_Open baseline valence + arousal (vectorised over subjects) ---
+    def _eo(band, ch):
+        col = f"{eo_cond}_psd_abs_{band}_{ch}"
+        return (df[col].astype(float) if col in df.columns
+                else pd.Series(np.nan, index=df.index))
+
+    eo_val = pd.Series(
+        _safe_log(_eo("alpha", faa_r)) - _safe_log(_eo("alpha", faa_l)),
+        index=df.index)
+    eo_beta = pd.concat([_eo("beta", c) for c in ar_ch], axis=1).mean(axis=1)
+    eo_alpha = pd.concat([_eo("alpha", c) for c in ar_ch], axis=1).mean(axis=1)
+    eo_aro = eo_beta / eo_alpha.replace(0, np.nan)
+
+    sids = df["subject_id"].astype(str).tolist()
+    summary = {"enabled": True, "preprocessing_dir": str(preproc_dir),
+               "per_emotion_n": {}, "per_emotion_base_n": {},
+               "emotions": emotions}
+
+    def _bp(path):
+        if not path.exists():
+            return None
+        try:
+            return _emotion_band_power(path, needed_ch, bands)
+        except Exception as e:
+            print(f"  IAPS WARN {path.name}: {type(e).__name__}: {e}")
+            return None
+
+    for code, cond in emotions.items():
+        win_v = np.full(len(df), np.nan); win_a = np.full(len(df), np.nan)
+        eob_v = np.full(len(df), np.nan); eob_a = np.full(len(df), np.nan)
+        n_ok = 0; n_base = 0
+        for i, sid in enumerate(sids):
+            bp_r = _bp(epoch_dir / f"{sid}_{cond}-epo.fif")
+            if bp_r is None:
+                continue
+            v_r, a_r = _va_from_bp(bp_r, faa_l, faa_r, ar_ch)
+            if not np.isfinite(v_r):
+                continue
+            n_ok += 1
+            # EO-baseline sensitivity pair
+            eob_v[i] = v_r - eo_val.iloc[i]
+            eob_a[i] = a_r - eo_aro.iloc[i]
+            # within-file baseline primary pair
+            bp_b = _bp(epoch_dir / f"{sid}_{cond}_base-epo.fif")
+            v_b, a_b = _va_from_bp(bp_b, faa_l, faa_r, ar_ch)
+            if np.isfinite(v_b):
+                win_v[i] = v_r - v_b
+                win_a[i] = a_r - a_b
+                n_base += 1
+        df[f"iaps_{code}v"] = win_v
+        df[f"iaps_{code}a"] = win_a
+        df[f"iaps_eo_{code}v"] = eob_v
+        df[f"iaps_eo_{code}a"] = eob_a
+        summary["per_emotion_n"][cond] = n_ok
+        summary["per_emotion_base_n"][cond] = n_base
+
+    return df, summary
+
+
+# Primary (within-file baseline) and sensitivity (EO baseline) feature columns.
+IAPS_COLS = ["iaps_Hv", "iaps_Ha", "iaps_Cv", "iaps_Ca",
+             "iaps_Sv", "iaps_Sa", "iaps_Fv", "iaps_Fa"]
+IAPS_EO_COLS = ["iaps_eo_Hv", "iaps_eo_Ha", "iaps_eo_Cv", "iaps_eo_Ca",
+                "iaps_eo_Sv", "iaps_eo_Sa", "iaps_eo_Fv", "iaps_eo_Fa"]
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -497,6 +676,17 @@ def main():
     union_built = [c for c in APRIORI_UNION_COLS if c in df.columns]
     print(f"  A priori union composites built: {len(union_built)}/9 "
           f"({union_built})")
+
+    # IAPS valence/arousal features (8 emotion features, EO-baseline-relative)
+    df, iaps_summary = add_iaps_features(df, p, cfg["paths"], fb_dir)
+    if iaps_summary.get("enabled"):
+        built = [c for c in IAPS_COLS if c in df.columns]
+        built_eo = [c for c in IAPS_EO_COLS if c in df.columns]
+        print(f"  IAPS features built: within(primary)={len(built)}/8, "
+              f"eo(sensitivity)={len(built_eo)}/8")
+        print(f"    response viable N: {iaps_summary.get('per_emotion_n')}")
+        print(f"    within-baseline viable N: "
+              f"{iaps_summary.get('per_emotion_base_n')}")
 
     beh_dir = resolve(cfg["paths"]["behavioral_dir"])
     full = merge_behavioural(df, beh_dir, p)
@@ -577,6 +767,13 @@ def main():
         "n_engineered_added": int(n_added),
         "n_apriori_union_built": len(theory_members),
         "periodic_composites_built": bool(has_periodic),
+        "iaps_enabled": bool(iaps_summary.get("enabled", False)),
+        "iaps_features_built_within": [c for c in IAPS_COLS if c in full.columns],
+        "iaps_features_built_eo": [c for c in IAPS_EO_COLS if c in full.columns],
+        "iaps_per_emotion_response_n": iaps_summary.get("per_emotion_n", {}),
+        "iaps_per_emotion_within_baseline_n": iaps_summary.get(
+            "per_emotion_base_n", {}),
+        "iaps_preprocessing_dir": iaps_summary.get("preprocessing_dir"),
         "curation_enabled": bool(curation_enable),
         "curation_n_after": (curation_report.get("n_features_after")
                              if curation_enable else None),

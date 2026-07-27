@@ -18,6 +18,12 @@ params:
     P:  [P1,  P2,  P3,  P4,  P5]
     SF: [SF1, SF2, SF3, SF4, SF5]
 
+  # Items dropped from the single item-level Global_EF composite, mirroring
+  # feature_engineering.aufei_drop_items. [] = keep all items (item screening
+  # was evaluated and abandoned; see CLAUDE.md). Applied to the global alpha
+  # only; the per-subscale reliability above is unaffected.
+  aufei_drop_items: []
+
   # Reliability thresholds for interpretation in the summary.
   alpha_min_acceptable: 0.50
   alpha_preferred: 0.70

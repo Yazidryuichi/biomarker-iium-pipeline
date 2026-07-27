@@ -83,8 +83,17 @@ def discover_subjects(edf_dir):
     return subjects
 
 
+RENAME_OLD_TO_NEW = {"T3": "T7", "T4": "T8", "T5": "P7", "T6": "P8"}
+
 def read_edf(filepath, channels):
     raw = mne.io.read_raw_edf(filepath, preload=True, verbose=False)
+
+    # Mitsar/WinEEG pakai label 10-20 lama; rename ke nama modern SEBELUM
+    # montage supaya tiap channel dapat posisi (ICLabel butuh posisi).
+    present = {k: v for k, v in RENAME_OLD_TO_NEW.items() if k in raw.ch_names}
+    if present:
+        raw.rename_channels(present)
+
     mapping = {}
     for ch in raw.ch_names:
         if ch in channels:
@@ -95,10 +104,18 @@ def read_edf(filepath, channels):
             mapping[ch] = "misc"
     raw.set_channel_types(mapping)
     raw.pick(mne.pick_types(raw.info, eeg=True))
-    raw.set_montage(mne.channels.make_standard_montage("standard_1020"),
-                    on_missing="warn")
-    return raw
 
+    # Gagal-keras: nggak ada lagi drop channel diam-diam
+    if len(raw.ch_names) != len(channels):
+        raise ValueError(
+            f"{Path(filepath).name}: kept {len(raw.ch_names)} EEG ch, "
+            f"expected {len(channels)}. "
+            f"Hilang: {sorted(set(channels) - set(raw.ch_names))} | "
+            f"Tak dikenal: {sorted(set(raw.ch_names) - set(channels))}")
+
+    raw.set_montage(mne.channels.make_standard_montage("standard_1020"),
+                    on_missing="raise")
+    return raw
 
 def apply_filters(raw, bandpass, notch):
     raw.filter(l_freq=bandpass[0], h_freq=bandpass[1], verbose=False)
@@ -265,6 +282,7 @@ def clean_one(filepath, cfg, subject, condition):
     qc["ica_excluded_labels"] = ic_info["excluded_labels"]
     qc["ica_excluded_probs"] = ic_info["excluded_probabilities"]
     qc["ica_all_labels"] = ic_info["all_labels"]
+    qc["ica_all_probabilities"] = ic_info["all_probabilities"]
 
     if bads["all"]:
         raw_clean.interpolate_bads(verbose=False)
@@ -295,6 +313,201 @@ def clean_one(filepath, cfg, subject, condition):
     floor = int(p.get("min_epochs", 60))
     qc["status"] = "LOW_EPOCH_COUNT" if len(epochs_clean) < floor else "OK"
     return epochs_clean, qc
+
+
+def find_emotion_onset(raw, cond):
+    """Onset (sec) of the emotion's own marker inside its EDF.
+
+    cond is like '1_Happy'; we match the emotion word ('happy') against the
+    annotation descriptions (which carry boundary markers such as '2_Calm' or
+    'BAD_ACQ_SKIP'). Markers are inconsistent across subjects — sometimes the
+    file's own start marker is present, sometimes only the next emotion's
+    boundary marker. When the own marker is absent we fall back to 0.0 (the
+    file effectively begins at the emotion block).
+    """
+    word = cond.split("_", 1)[-1].strip().lower()
+    for onset, desc in zip(raw.annotations.onset, raw.annotations.description):
+        d = str(desc).strip().lower()
+        if "bad" in d:
+            continue
+        if word and word in d:
+            return float(onset)
+    return 0.0
+
+
+def emotion_block_end(raw, response_end):
+    """End of the emotion block = onset of the next-emotion boundary marker
+    (the last non-BAD annotation), used to place the within-file baseline at
+    the block tail. Falls back to the recording end (minus a small margin)
+    when no boundary marker beyond the response window is present.
+    """
+    onsets = [float(o) for o, d in zip(raw.annotations.onset,
+                                       raw.annotations.description)
+              if "bad" not in str(d).strip().lower()]
+    rec_end = float(raw.times[-1])
+    cands = [o for o in onsets if o > response_end + 1.0]
+    return min(max(cands), rec_end) if cands else rec_end - 1.0
+
+
+def _epoch_window(raw_clean, start, end, p, ip, cfg, overlap=None):
+    """Crop a copy to [start, end], epoch, AutoReject. Returns (epochs, qc).
+
+    `overlap` (seconds) defaults to the IAPS window overlap; the decoder block
+    passes its own (decode.epoch_overlap) so the response/baseline windows and
+    the full-block decoder windows can use different overlaps.
+    """
+    rec_end = float(raw_clean.times[-1])
+    start = max(0.0, float(start)); end = min(float(end), rec_end)
+    r = raw_clean.copy().crop(tmin=start, tmax=end)
+    duration = float(p["epoch_duration"])
+    overlap = float(ip.get("epoch_overlap", 1.0)) if overlap is None else float(overlap)
+    events = mne.make_fixed_length_events(r, duration=duration, overlap=overlap)
+    epochs = mne.Epochs(r, events, tmin=0,
+                        tmax=duration - 1.0 / r.info["sfreq"],
+                        baseline=None, preload=True, verbose=False)
+    n_before = len(epochs)
+    ep_clean, rej_stats, n_dropped, pct = reject_epochs(epochs, p,
+                                                        cfg["random_state"])
+    qc = {"window_start_sec": round(start, 2), "window_end_sec": round(end, 2),
+          "n_epochs_before_reject": n_before,
+          "n_epochs_after_reject": len(ep_clean),
+          "n_epochs_dropped": n_dropped,
+          "pct_epochs_dropped": round(float(pct), 4)}
+    qc.update(rej_stats)
+    return ep_clean, qc
+
+
+def clean_one_emotion(filepath, cfg, subject, condition):
+    """Clean one emotion EDF and crop TWO windows from a single ICA pass:
+
+      response       first `window_sec` after the emotion onset (developed
+                     stimulus response; transient-safe via min_window_start_sec)
+      within_baseline last `window_sec` of the block (return-to-baseline tail
+                     before the next-emotion marker) — the PRIMARY IAPS baseline
+
+    Shares the resting cleaning path (read -> filter -> bad channels -> avg ref
+    -> ICA on the full 60-115 s recording -> interpolate) so both windows live
+    in the same reference frame as Eyes_Open (the sensitivity baseline). The two
+    windows are non-overlapping by construction (blocks are >= 64 s).
+
+    When `params.iaps.decode.enable`, a THIRD set of epochs is cropped from the
+    SAME ICA pass: the whole emotion block (onset -> next-emotion marker), epoched
+    at 2 s / `decode.epoch_overlap` (50% default). These full-block windows feed
+    the EXPLORATORY affective decoder (within-subject 4-emotion classification);
+    they are NOT used by the confirmatory feature_building/analysis path.
+
+    Returns (response_epochs_or_None, baseline_epochs_or_None,
+             decode_epochs_or_None, qc).
+    """
+    p = cfg["params"]
+    ip = p.get("iaps", {}) or {}
+    qc = {"subject": subject, "condition": condition, "filepath": filepath,
+          "kind": "emotion"}
+
+    raw = read_edf(filepath, cfg["recording"]["channels"])
+    qc["duration_sec"] = float(raw.times[-1])
+    qc["sfreq_raw"] = float(raw.info["sfreq"])
+    qc["n_channels_raw"] = len(raw.ch_names)
+
+    target_sfreq = float(cfg["recording"]["sfreq"])
+    if raw.info["sfreq"] != target_sfreq:
+        qc["resampled_from"] = float(raw.info["sfreq"])
+        raw.resample(target_sfreq, verbose=False)
+
+    onset = find_emotion_onset(raw, condition)
+    qc["emotion_onset_sec"] = round(onset, 2)
+    qc["emotion_onset_marker_found"] = bool(onset > 0.0)
+
+    apply_filters(raw, p["bandpass"], p.get("notch"))
+
+    bads = detect_bad_channels(raw, p)
+    qc["bad_channels"] = bads["all"]
+    if bads["all"]:
+        raw.info["bads"] = bads["all"]
+
+    qc["source_reference"] = "A1-A2 (Mitsar implicit)"
+    qc["output_reference"] = "average"
+    raw.set_eeg_reference("average", projection=False, verbose=False)
+
+    raw_clean, ic_info = run_ica(raw, p, cfg["random_state"])
+    qc["ica_n_components_fit"] = ic_info["n_components_fit"]
+    qc["ica_excluded_idx"] = ic_info["excluded_idx"]
+    qc["ica_excluded_labels"] = ic_info["excluded_labels"]
+    qc["ica_all_labels"] = ic_info["all_labels"]
+    qc["ica_all_probabilities"] = ic_info["all_probabilities"]
+
+    if bads["all"]:
+        raw_clean.interpolate_bads(verbose=False)
+        raw_clean.set_eeg_reference("average", projection=False, verbose=False)
+
+    window = float(ip.get("window_sec", 15.0))
+    skip = float(ip.get("skip_after_onset_sec", 0.0))
+    min_start = float(ip.get("min_window_start_sec", 5.0))
+    floor = int(ip.get("min_epochs", 4))
+    rec_end = float(raw_clean.times[-1])
+    qc["min_epochs_floor"] = floor
+
+    # ── Response window (first window_sec after onset) ──
+    r_start = max(onset + skip, min_start)
+    r_end = r_start + window
+    if r_end > rec_end:
+        if rec_end - min_start >= window:
+            r_end = rec_end; r_start = r_end - window
+            qc["response_window_slid_back"] = True
+        else:
+            qc["status"] = "WINDOW_TOO_SHORT"
+            qc["window_start_sec"] = round(r_start, 2)
+            qc["n_epochs_after_reject"] = 0
+            qc["viable"] = False
+            qc["base_viable"] = False
+            qc["decode_viable"] = False
+            return None, None, None, qc
+    resp_ep, rqc = _epoch_window(raw_clean, r_start, r_end, p, ip, cfg)
+    qc.update(rqc)                       # response stats at top level
+    ok = len(resp_ep) >= floor
+    qc["status"] = "OK" if ok else "LOW_EPOCH_COUNT"
+    qc["viable"] = bool(ok)
+
+    # ── Within-file baseline window (last window_sec of the block) ──
+    block_end = emotion_block_end(raw_clean, r_end)
+    b_end = min(block_end, rec_end)
+    b_start = b_end - window
+    base_ep = None
+    if b_start >= r_end:                 # non-overlapping with the response
+        base_ep_c, bqc = _epoch_window(raw_clean, b_start, b_end, p, ip, cfg)
+        qc["base_window_start_sec"] = bqc["window_start_sec"]
+        qc["base_window_end_sec"] = bqc["window_end_sec"]
+        qc["base_n_epochs_after_reject"] = bqc["n_epochs_after_reject"]
+        base_ok = len(base_ep_c) >= floor
+        base_ep = base_ep_c if base_ok else None
+        qc["base_viable"] = bool(base_ok)
+    else:
+        qc["base_viable"] = False
+        qc["base_window_note"] = "block too short for a non-overlapping tail"
+
+    # ── Full-block decoder window (EXPLORATORY; onset -> block end) ──
+    dec_cfg = ip.get("decode", {}) or {}
+    decode_ep = None
+    if dec_cfg.get("enable", False):
+        d_floor = int(dec_cfg.get("min_epochs", 20))
+        d_overlap = float(dec_cfg.get("epoch_overlap", 1.0))
+        d_start = r_start                       # same transient-safe onset floor
+        d_end = max(block_end, r_end)           # whole block, not just response
+        qc["decode_min_epochs_floor"] = d_floor
+        if d_end - d_start >= float(p["epoch_duration"]):
+            dec_ep_c, dqc = _epoch_window(raw_clean, d_start, d_end, p, ip, cfg,
+                                          overlap=d_overlap)
+            qc["decode_window_start_sec"] = dqc["window_start_sec"]
+            qc["decode_window_end_sec"] = dqc["window_end_sec"]
+            qc["decode_n_epochs_after_reject"] = dqc["n_epochs_after_reject"]
+            dec_ok = len(dec_ep_c) >= d_floor
+            decode_ep = dec_ep_c if dec_ok else None
+            qc["decode_viable"] = bool(dec_ok)
+        else:
+            qc["decode_viable"] = False
+            qc["decode_window_note"] = "block too short for decoder windows"
+
+    return (resp_ep if ok else None), base_ep, decode_ep, qc
 
 
 def main():
@@ -338,12 +551,64 @@ def main():
                 print(f"  ERROR: {e}")
             qc_report.append(qc)
 
+    # ─── IAPS emotion windows (viability + cleaned response segments) ───
+    iaps_cfg = cfg["params"].get("iaps", {}) or {}
+    emotion_conditions = cfg["recording"].get("emotion_conditions", []) or []
+    n_emo_ok = 0
+    if iaps_cfg.get("enable", False) and emotion_conditions:
+        print(f"\n=== IAPS emotion windows "
+              f"({iaps_cfg.get('window_sec', 15)} s, floor "
+              f"{iaps_cfg.get('min_epochs', 4)} epochs) ===")
+        for sid in sorted(subjects):
+            for cond in emotion_conditions:
+                if cond not in subjects[sid]:
+                    print(f"  SKIP {sid}/{cond}: no file")
+                    continue
+                print(f"\n[emotion] {sid} / {cond}")
+                try:
+                    resp_ep, base_ep, decode_ep, qc = clean_one_emotion(
+                        subjects[sid][cond], cfg, sid, cond)
+                    if qc["status"] == "OK" and resp_ep is not None:
+                        resp_ep.save(epoch_dir / f"{sid}_{cond}-epo.fif",
+                                     overwrite=True, verbose=False)
+                        n_emo_ok += 1
+                        if base_ep is not None:
+                            base_ep.save(
+                                epoch_dir / f"{sid}_{cond}_base-epo.fif",
+                                overwrite=True, verbose=False)
+                        if decode_ep is not None:
+                            decode_ep.save(
+                                epoch_dir / f"{sid}_{cond}_decode-epo.fif",
+                                overwrite=True, verbose=False)
+                        print(f"  OK: response {qc['n_epochs_after_reject']} ep "
+                              f"[{qc['window_start_sec']},{qc['window_end_sec']}]s "
+                              f"| within-base "
+                              f"{qc.get('base_n_epochs_after_reject', 0)} ep "
+                              f"({'ok' if qc.get('base_viable') else 'NON-VIABLE'})"
+                              f" | decode "
+                              f"{qc.get('decode_n_epochs_after_reject', 0)} ep "
+                              f"({'ok' if qc.get('decode_viable') else 'NON-VIABLE'})")
+                    else:
+                        print(f"  NON-VIABLE: {qc.get('status')} "
+                              f"({qc.get('n_epochs_after_reject', 0)} epochs)")
+                except Exception as e:
+                    qc = {"subject": sid, "condition": cond, "kind": "emotion",
+                          "viable": False, "base_viable": False,
+                          "status": f"ERROR: {type(e).__name__}: {str(e)[:200]}"}
+                    print(f"  ERROR: {e}")
+                qc_report.append(qc)
+
     with open(out_dir / "qc.json", "w") as f:
         json.dump(qc_report, f, indent=2, default=str)
 
-    n_ok = sum(1 for q in qc_report if q.get("status") == "OK")
-    n_low = sum(1 for q in qc_report if q.get("status") == "LOW_EPOCH_COUNT")
+    rest_qc = [q for q in qc_report if q.get("kind") != "emotion"]
+    emo_qc = [q for q in qc_report if q.get("kind") == "emotion"]
+    n_ok = sum(1 for q in rest_qc if q.get("status") == "OK")
+    n_low = sum(1 for q in rest_qc if q.get("status") == "LOW_EPOCH_COUNT")
     n_err = sum(1 for q in qc_report if "ERROR" in str(q.get("status", "")))
+    n_emo_viable = sum(1 for q in emo_qc if q.get("viable"))
+    n_emo_base_viable = sum(1 for q in emo_qc if q.get("base_viable"))
+    n_emo_decode_viable = sum(1 for q in emo_qc if q.get("decode_viable"))
 
     notes = {
         "stage": "preprocessing",
@@ -354,12 +619,22 @@ def main():
         "n_files_processed": len(qc_report),
         "n_ok": n_ok, "n_low_epoch": n_low, "n_errors": n_err,
         "min_epochs_floor": floor,
+        "iaps_enabled": bool(iaps_cfg.get("enable", False)),
+        "emotion_conditions": list(emotion_conditions),
+        "n_emotion_files_processed": len(emo_qc),
+        "n_emotion_viable": n_emo_viable,
+        "n_emotion_within_baseline_viable": n_emo_base_viable,
+        "iaps_decode_enabled": bool(
+            (iaps_cfg.get("decode", {}) or {}).get("enable", False)),
+        "n_emotion_decode_viable": n_emo_decode_viable,
         "outputs": ["cleaned_epochs/", "qc.json"],
     }
     with open(out_dir / "run_notes.json", "w") as f:
         json.dump(notes, f, indent=2, default=str)
 
     print(f"\nSummary: {n_ok} OK, {n_low} low-epoch dropped, {n_err} errors")
+    if emo_qc:
+        print(f"IAPS emotion: {n_emo_viable}/{len(emo_qc)} viable windows")
     print(f"Output: {out_dir}")
 
 
