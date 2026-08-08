@@ -26,6 +26,7 @@ Archives/
 # inside them; the cleaned exports key rows by name rather than by code; the
 # Digit Span workbooks carry the Kode -> Nama mapping. None of it may ship.
 instruments/flanker/data/
+instruments/flanker/experiment/data/
 instruments/flanker/cleaned/
 instruments/flanker/cleaned_data/
 instruments/flanker/psychopy_env/
