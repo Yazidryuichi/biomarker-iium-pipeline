@@ -629,15 +629,12 @@ def behavioral_correlations(fe_dir, out_dir, method="spearman"):
     k = len(cols)
     r = pd.DataFrame(np.eye(k), index=cols, columns=cols)
     pv = pd.DataFrame(np.zeros((k, k)), index=cols, columns=cols)
-    nn = pd.DataFrame(0, index=cols, columns=cols)
     pairs = []
     for i in range(k):
         for j in range(i + 1, k):
             a, b = cols[i], cols[j]
             ok = d[[a, b]].dropna()
             n = len(ok)
-            nn.loc[a, a] = int(d[a].notna().sum())
-            nn.loc[b, b] = int(d[b].notna().sum())
             if n < 3:
                 rr, pp = np.nan, np.nan
             elif method == "pearson":
@@ -646,7 +643,6 @@ def behavioral_correlations(fe_dir, out_dir, method="spearman"):
                 rr, pp = stats.spearmanr(ok[a], ok[b])
             r.loc[a, b] = r.loc[b, a] = rr
             pv.loc[a, b] = pv.loc[b, a] = pp
-            nn.loc[a, b] = nn.loc[b, a] = n
             pairs.append({"var1": a, "var2": b, "n": n,
                           "r": None if pd.isna(rr) else round(float(rr), 3),
                           "p": None if pd.isna(pp) else round(float(pp), 4),
