@@ -149,7 +149,8 @@ data/EDF + data/Behavioral
        reads preprocessing + validation + feature_engineering + analysis
        └── output/<ts>/{report.md, eeg_quality_*, aufei_*,
            flanker_*, digit_span_*, n_reconciliation,
-           sample_demographics}.csv
+           sample_demographics, behavioral_correlation_*}.csv
+           + behavioral_correlation_heatmap.png
 
    ┄ research_report/main.py     (sidecar; runs on demand)
        reads all five pipeline stages + data_quality_check

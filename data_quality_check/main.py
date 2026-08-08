@@ -28,6 +28,9 @@ Writes:
   output/<ts>/flanker_reliability_audit.csv   reliability + recommendation per metric
   output/<ts>/digit_span_descriptives.csv
   output/<ts>/sample_demographics.csv
+  output/<ts>/behavioral_correlation_matrix.csv   all behavioural metrics, r
+  output/<ts>/behavioral_correlation_pairs.csv    long form: r, p, n, definitional
+  output/<ts>/behavioral_correlation_heatmap.png  lower-triangle heatmap
   output/<ts>/run_notes.json
 """
 from __future__ import annotations
@@ -560,6 +563,152 @@ def sample_demographics(fe_dir):
 
 
 # ──────────────────────────────────────────────────────────────────
+# Behavioural correlation matrix + heatmap
+# ──────────────────────────────────────────────────────────────────
+
+# Grouped so the heatmap has visible instrument blocks. age_months is carried
+# as its own block because it is the documented maturation confound — a
+# behavioural correlation read without it is misleading.
+BEHAVIORAL_GROUPS = [
+    ("Age", ["age_months"]),
+    ("AUFEI-O", ["Global_EF", "WM_score", "IC_score", "CF_score",
+                 "P_score", "SF_score"]),
+    ("Flanker", ["acc_overall", "acc_incongruent", "rt_mean", "rt_congruent",
+                 "rt_incongruent", "flanker_effect", "rt_cv", "rt_iqr",
+                 "ies_congruent", "ies_incongruent",
+                 "ddm_v_congruent", "ddm_a_congruent", "ddm_t0_congruent",
+                 "ddm_v_incongruent", "ddm_a_incongruent", "ddm_t0_incongruent",
+                 "ddm_delta_v"]),
+    ("Digit Span", ["FW_Span", "BW_Span", "Total_Span",
+                    "FW_Raw", "BW_Raw", "Total_Raw"]),
+]
+
+# Within-instrument pairs share method variance and are often algebraically
+# dependent outright (rt_mean contains rt_congruent; ies = RT/acc; Total_Span
+# = FW + BW; every ddm_* is fit on the same trial RTs). A large r there is
+# arithmetic or common method, not converging evidence. Flagged from group
+# membership rather than an enumerated pair list — enumeration kept missing
+# the derived-overlap cases.
+_GROUP_OF = {c: g for g, cols in BEHAVIORAL_GROUPS for c in cols}
+
+
+def behavioral_correlations(fe_dir, out_dir, method="spearman"):
+    """Correlation matrix over every behavioural metric in full_dataset.csv.
+
+    Spearman by default: at pilot N with ceiling-compressed AUFEI items and a
+    degenerate DDM tail, rank correlation is the defensible choice.
+
+    Pairwise-complete (each cell uses the subjects with both values present),
+    so n varies by cell and is reported per pair. Returns
+    (r_matrix, pairs_long, png_path).
+    """
+    if fe_dir is None or not (fe_dir / "full_dataset.csv").exists():
+        return pd.DataFrame(), pd.DataFrame(), None
+    from scipy import stats
+
+    full = pd.read_csv(fe_dir / "full_dataset.csv")
+    cols, boundaries, labels = [], [], []
+    for gname, group in BEHAVIORAL_GROUPS:
+        present = []
+        for c in group:
+            if c not in full.columns:
+                continue
+            s = pd.to_numeric(full[c], errors="coerce")
+            # constant / all-NaN columns have undefined correlation
+            if s.notna().sum() >= 3 and s.nunique(dropna=True) > 1:
+                present.append(c)
+        if not present:
+            continue
+        cols += present
+        boundaries.append(len(cols))
+        labels.append((gname, len(cols) - len(present) / 2))
+    if len(cols) < 2:
+        return pd.DataFrame(), pd.DataFrame(), None
+
+    d = full[cols].apply(pd.to_numeric, errors="coerce")
+    k = len(cols)
+    r = pd.DataFrame(np.eye(k), index=cols, columns=cols)
+    pv = pd.DataFrame(np.zeros((k, k)), index=cols, columns=cols)
+    nn = pd.DataFrame(0, index=cols, columns=cols)
+    pairs = []
+    for i in range(k):
+        for j in range(i + 1, k):
+            a, b = cols[i], cols[j]
+            ok = d[[a, b]].dropna()
+            n = len(ok)
+            nn.loc[a, a] = int(d[a].notna().sum())
+            nn.loc[b, b] = int(d[b].notna().sum())
+            if n < 3:
+                rr, pp = np.nan, np.nan
+            elif method == "pearson":
+                rr, pp = stats.pearsonr(ok[a], ok[b])
+            else:
+                rr, pp = stats.spearmanr(ok[a], ok[b])
+            r.loc[a, b] = r.loc[b, a] = rr
+            pv.loc[a, b] = pv.loc[b, a] = pp
+            nn.loc[a, b] = nn.loc[b, a] = n
+            pairs.append({"var1": a, "var2": b, "n": n,
+                          "r": None if pd.isna(rr) else round(float(rr), 3),
+                          "p": None if pd.isna(pp) else round(float(pp), 4),
+                          "instrument1": _GROUP_OF.get(a, "?"),
+                          "instrument2": _GROUP_OF.get(b, "?"),
+                          "same_instrument": _GROUP_OF.get(a) == _GROUP_OF.get(b)})
+    pairs_df = pd.DataFrame(pairs).sort_values(
+        "r", key=lambda s: s.abs(), ascending=False, na_position="last")
+
+    png = _corr_heatmap(r, pv, boundaries, labels, out_dir, method, d)
+    return r, pairs_df, png
+
+
+def _corr_heatmap(r, pv, boundaries, labels, out_dir, method, d):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except ImportError:
+        print("  SKIP behavioural heatmap: matplotlib/seaborn not installed")
+        return None
+
+    # Lower triangle only — the matrix is symmetric and 25+ labels per axis
+    # is already dense.
+    mask = np.triu(np.ones_like(r, dtype=bool), k=1)
+    annot = r.round(2).astype(object)
+    for a in r.index:
+        for b in r.columns:
+            v = r.loc[a, b]
+            if pd.isna(v):
+                annot.loc[a, b] = ""
+            else:
+                star = "*" if (a != b and pv.loc[a, b] < 0.05) else ""
+                annot.loc[a, b] = f"{v:.2f}{star}".replace("0.", ".")
+
+    k = len(r)
+    side = max(8.0, 0.42 * k + 3.0)
+    fig, ax = plt.subplots(figsize=(side, side * 0.88))
+    sns.heatmap(r, mask=mask, cmap="RdBu_r", vmin=-1, vmax=1, center=0,
+                square=True, linewidths=0.4, linecolor="white",
+                annot=annot, fmt="", annot_kws={"size": max(4.5, 11 - 0.22 * k)},
+                cbar_kws={"shrink": 0.55, "label": f"{method} r"}, ax=ax)
+    for b in boundaries[:-1]:
+        ax.axhline(b, color="black", lw=1.4)
+        ax.axvline(b, color="black", lw=1.4)
+    ax.tick_params(labelsize=max(5.5, 11 - 0.18 * k))
+    n_lo, n_hi = int(min(d.notna().sum())), int(max(d.notna().sum()))
+    ax.set_title(f"Behavioural metric correlations ({method}, pairwise-complete, "
+                 f"n = {n_lo}–{n_hi})\n"
+                 f"* p < .05 uncorrected — {k * (k - 1) // 2} pairs tested, "
+                 f"no multiplicity correction; exploratory only",
+                 fontsize=11, pad=14)
+    fig.tight_layout()
+    png = out_dir / "behavioral_correlation_heatmap.png"
+    fig.savefig(png, dpi=150)
+    plt.close(fig)
+    print(f"  Behavioural correlation heatmap: {png}")
+    return str(png)
+
+
+# ──────────────────────────────────────────────────────────────────
 # Report assembly (Markdown — headline-first)
 # ──────────────────────────────────────────────────────────────────
 
@@ -917,8 +1066,65 @@ def build_report(ctx):
              "check to `validation/main.py` mirroring the Flanker pattern.")
     L.append("")
 
-    # ─── Section 7: Pilot framing constraints (kept; no recommendations) ─
-    L.append("## 7. Pilot framing constraints")
+    # ─── Section 7: Behavioural correlation matrix ─────────────────
+    L.append("## 7. Behavioural metric correlations")
+    L.append("")
+    bc = ctx["beh_corr"]
+    if bc.empty:
+        L.append("Not computed — no `full_dataset.csv` in the "
+                 "feature_engineering output.")
+        L.append("")
+    else:
+        bp = ctx["beh_pairs"]
+        L.append(f"{len(bc)} metrics ({ctx['beh_corr_method']} rank correlation, "
+                 f"pairwise-complete). Full matrix: "
+                 f"`behavioral_correlation_matrix.csv`; every pair with r, p "
+                 f"and n: `behavioral_correlation_pairs.csv`; heatmap: "
+                 f"`behavioral_correlation_heatmap.png`.")
+        L.append("")
+        L.append("![Behavioural correlation heatmap]"
+                 "(behavioral_correlation_heatmap.png)")
+        L.append("")
+        L.append("**Read this before quoting any cell.** Three caveats, in "
+                 "order of how badly they bite:")
+        L.append("")
+        L.append("1. *Within-instrument blocks are not findings.* Inside the "
+                 "black-bordered blocks, metrics are algebraic functions of "
+                 "one another (`flanker_effect` = RT_inc − RT_con, `ies_*` = "
+                 "RT / accuracy, `Total_Span` = FW + BW, `ddm_delta_v` = "
+                 "v_inc − v_con) or are fit on the same trials (every `ddm_*` "
+                 "parameter comes from the same RT distribution as `rt_*`). "
+                 "Those correlations are arithmetic plus shared method "
+                 "variance. The `same_instrument` column in the pairs CSV "
+                 "marks them; only the off-block cells carry convergent-"
+                 "validity information.")
+        L.append(f"2. *No multiplicity correction.* "
+                 f"{len(bc) * (len(bc) - 1) // 2} pairs are tested; at α = .05 "
+                 f"roughly {round(len(bc) * (len(bc) - 1) / 2 * 0.05)} "
+                 f"significant results are expected under the null alone. The "
+                 f"asterisks are exploratory markers, not confirmatory tests.")
+        L.append("3. *Sample is the merged EEG ∩ behavioural set*, not the "
+                 "full behavioural N — this matrix comes from "
+                 "`full_dataset.csv`. Metrics with ceiling compression (AUFEI "
+                 "items, Flanker accuracy) have attenuated correlations by "
+                 "construction; see §4 and §5.")
+        L.append("")
+        real = bp[(~bp["same_instrument"]) & bp["r"].notna()].head(10)
+        if not real.empty:
+            L.append("Strongest **cross-instrument** associations — the only "
+                     "cells that could be convergent validity (descriptive, "
+                     "uncorrected):")
+            L.append("")
+            L.append("| var1 | var2 | r | p | n |")
+            L.append("|---|---|---|---|---|")
+            for _, row in real.iterrows():
+                L.append(f"| {row['var1']} ({row['instrument1']}) | "
+                         f"{row['var2']} ({row['instrument2']}) | {row['r']} | "
+                         f"{row['p']} | {int(row['n'])} |")
+            L.append("")
+
+    # ─── Section 8: Pilot framing constraints (kept; no recommendations) ─
+    L.append("## 8. Pilot framing constraints")
     L.append("")
     L.append("- At N = 25–28, power to detect r = 0.30 is ≈ 0.35; r = 0.40 ≈ 0.60. "
              "All hypothesis tests in the analysis stage are estimation, not "
@@ -984,6 +1190,12 @@ def main():
     demo = sample_demographics(fe)
     demo.to_csv(out_dir / "sample_demographics.csv", index=False)
 
+    beh_corr, beh_pairs, beh_png = behavioral_correlations(
+        fe, out_dir, str(p.get("behavioral_corr_method", "spearman")))
+    if not beh_corr.empty:
+        beh_corr.round(3).to_csv(out_dir / "behavioral_correlation_matrix.csv")
+        beh_pairs.to_csv(out_dir / "behavioral_correlation_pairs.csv", index=False)
+
     n_recon = n_reconciliation(beh_dir, p, preproc, fe, analysis)
     n_recon.to_csv(out_dir / "n_reconciliation.csv", index=False)
 
@@ -1032,6 +1244,10 @@ def main():
         "ds_rel": ds_rel,
         "demographics": demo,
         "n_recon": n_recon,
+        "beh_corr": beh_corr,
+        "beh_pairs": beh_pairs,
+        "beh_corr_png": beh_png,
+        "beh_corr_method": str(p.get("behavioral_corr_method", "spearman")),
     }
     report = build_report(ctx)
     (out_dir / "report.md").write_text(report, encoding="utf-8")
@@ -1047,7 +1263,10 @@ def main():
                     "aufei_descriptives.csv", "aufei_item_ceiling_floor.csv",
                     "flanker_descriptives.csv", "flanker_construct_validity.csv",
                     "flanker_subject_flags.csv", "flanker_reliability_audit.csv",
-                    "digit_span_descriptives.csv", "sample_demographics.csv"],
+                    "digit_span_descriptives.csv", "sample_demographics.csv",
+                    "behavioral_correlation_matrix.csv",
+                    "behavioral_correlation_pairs.csv",
+                    "behavioral_correlation_heatmap.png"],
     }
     with open(out_dir / "run_notes.json", "w") as f:
         json.dump(notes, f, indent=2, default=str)

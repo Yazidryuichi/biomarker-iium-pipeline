@@ -43,5 +43,10 @@ params:
   digit_span_fw_max_plausible: 9
   digit_span_bw_max_plausible: 8
 
+  # Behavioural correlation matrix: spearman (default) or pearson.
+  # Spearman because AUFEI is ceiling-compressed ordinal and the DDM tail is
+  # degenerate — Pearson would be leaning on assumptions these data break.
+  behavioral_corr_method: spearman
+
   # Whether to write the human-readable Markdown report
   write_report_md: true
