@@ -3,24 +3,30 @@
 Operating notes for Claude Code in this repository. Read this before making
 changes.
 
+**The behavioural side lives in `instruments/CLAUDE.md`** — the three measures,
+their construct-validity findings, which targets are usable, and how to add a
+new behavioural measure. This file covers the EEG pipeline: layout, stages,
+preprocessing invariants, and the analysis path.
+
 ## What this project is
 
 A 5-stage Python pipeline plus two sidecar reporters that turns raw
 resting-state EDF recordings into candidate QEEG biomarkers of executive
-function in Indonesian children aged 6–12. Pilot N=26 (one subject-condition
-dropped by the cleaning floor), target N=100.
+function in Indonesian children aged 6–12. Target N=100; see the pilot N
+reconciliation at the end of this file.
 
 **Primary inferential mode: confirmatory hierarchical OLS** on a 9-feature
 a priori union of theory-driven QEEG composites, with age as a regressor
 (Frisch-Waugh handling of the maturation confound). **Sensitivity track:
 exploratory ML grid** (ElasticNetCV primary; RandomForest / XGBoost
-sensitivity) over the same composites plus a data-driven curated pool
-plus a hybrid; selection-corrected permutation wraps the entire (target ×
-scheme × model) grid. No median-split classification, no quantum, no
-data-driven feature search on the confirmatory path. Exploratory ML nulls
-in this pilot are partly confounded with the Flanker construct-validity
-failure — that caveat must accompany any exploratory result in a report.
-See `README.md` for the user-facing summary.
+sensitivity) over the same composites plus a data-driven curated pool plus a
+hybrid; selection-corrected permutation wraps the entire (target × scheme ×
+model) grid. No median-split classification, no quantum, no data-driven
+feature search on the confirmatory path.
+
+Exploratory ML nulls in this pilot are partly confounded with the Flanker
+construct-validity failure — that caveat must accompany any exploratory result
+in a report. `README.md` holds the user-facing summary.
 
 ## Repository layout (load-bearing)
 
@@ -34,6 +40,7 @@ biomarker-iium-pipeline/
 ├── requirements.lock           pinned deps (kept from main)
 ├── data/                       EDF/ and Behavioral/ (gitignored)
 ├── instruments/                the tasks that produce the behavioural data
+│   ├── CLAUDE.md               behavioural-side operating notes
 │   ├── flanker/                PsychoPy Eriksen Flanker + cleaning notebooks
 │   └── digit_span/             browser Digit Span admin tool + TTS stimuli
 ├── preprocessing/              Stage 1  (pipeline)
@@ -43,7 +50,6 @@ biomarker-iium-pipeline/
 ├── analysis/                   Stage 5  (pipeline)
 ├── data_quality_check/         Sidecar reporter — pilot QC document
 └── research_report/            Sidecar reporter — research report
-                                 (data quality + pipeline + OLS + ML + screening)
 ```
 
 **Hard rules about the root**:
@@ -57,30 +63,17 @@ biomarker-iium-pipeline/
   (2026-07-27). A public repo without a licence, without CI, and without a
   dependency pin is a regression, and none of the three competes with the
   flat-stage design. Do not delete them as "root clutter".
-- `instruments/` is the fourth exception (added 2026-07-27). It is NOT a
-  pipeline stage and does not follow the three-thing stage layout — it holds
-  the measurement tools themselves (Flanker task, Digit Span admin app), which
-  produce the behavioural data the pipeline consumes. Each instrument keeps
-  its own `CLAUDE.md`. Do not fold them into a stage, and do not add a stage
-  that imports from them.
-
-**`instruments/` publishes the task, never the responses.** Every instrument
-folder holds its own participant data alongside its code, and all of it is
-gitignored: Flanker `data/`, `cleaned/`, `psychopy_env/`; Digit Span `output/`
-and `saved_page/`. This is not optional tidiness — Flanker filenames and their
-`participant` column carry children's given names, the cleaned exports key rows
-by name instead of by code, the Digit Span workbooks carry the `Kode -> Nama`
-mapping that de-anonymises the whole EEG dataset, and `saved_page/` was saved
-mid-session with seven names rendered into it. Before committing anything new
-under `instruments/`, run `git add -An instruments` and grep the resulting file
-list for participant names. Notebooks are covered by the repo-wide `*.ipynb`
-rule because they store names in their cell outputs; do not add an exception
-without stripping outputs first.
-- `CLAUDE.md` is the only Claude-instruction file allowed at root; do not
-  spawn additional `.md` siblings to it.
+- `instruments/` is the fourth exception. It is NOT a pipeline stage and does
+  not follow the three-thing stage layout — it holds the measurement tools
+  themselves. Do not fold them into a stage, and do not add a stage that
+  imports from them. `instruments/` publishes the task, never the responses;
+  the full data rule is in `instruments/CLAUDE.md`.
+- Root `CLAUDE.md` is the only Claude-instruction file allowed at root; do not
+  spawn `.md` siblings to it. Nested `CLAUDE.md` under `instruments/` is the
+  documented exception (one for the behavioural side, one per instrument).
 - No shared `utils/` or `lib/`. Each stage inlines its own helpers (config
-  loader, behavioural loaders, subject discovery). Some duplication of
-  trivial helpers is the price for a clean root.
+  loader, behavioural loaders, subject discovery). Some duplication of trivial
+  helpers is the price for a clean root.
 - No top-level orchestrator. Each stage is run explicitly:
   `python <stage>/main.py`.
 - If you have something to communicate to the user (decisions, methodology
@@ -93,19 +86,14 @@ without stripping outputs first.
 <stage>/output/<ts>/       timestamped run output (gitignored)
 ```
 
-`output/.gitkeep` is tracked so the folder exists in a fresh checkout. Run
-artifacts (`<ts>/`) are gitignored.
+`output/.gitkeep` is tracked so the folder exists in a fresh checkout.
 
-**Pipeline stages vs sidecar reporters**:
-- A *pipeline stage* has one predecessor and one successor (or is the head
-  or tail). Re-running upstream invalidates it.
-- A *sidecar reporter* reads from multiple upstream stages, produces a
-  human-readable report, and is not consumed by anyone downstream. Two
-  exist: `data_quality_check/` (pilot QC audit, internal use) and
-  `research_report/` (5-section research document: data quality + pipeline
-  description + confirmatory OLS + exploratory ML + screening index demo).
-  Sidecars follow the same three-thing layout but are run on demand, not
-  as part of the run chain.
+**Pipeline stages vs sidecar reporters**: a *pipeline stage* has one
+predecessor and one successor (or is head or tail), and re-running upstream
+invalidates it. A *sidecar reporter* reads from multiple upstream stages,
+produces a human-readable report, and is consumed by no one downstream.
+Sidecars follow the same three-thing layout but run on demand, not as part of
+the chain.
 
 ## Stage I/O contract
 
@@ -114,8 +102,8 @@ Every stage:
 2. Auto-resolves its predecessor by scanning `<prev>/output/` for the
    lexically-latest `YYYY-MM-DD_HHMMSS` subdir.
 3. Creates a new `<stage>/output/<YYYY-MM-DD_HHMMSS>/` for this run.
-4. Writes its primary outputs + `run_notes.json` (timestamp, git commit,
-   input dir consumed, outputs produced) — the audit trail.
+4. Writes its primary outputs + `run_notes.json` (timestamp, git commit, input
+   dir consumed, outputs produced) — the audit trail.
 
 There is no shared "run dir," no shared `results/`, no orchestrator.
 
@@ -134,7 +122,7 @@ data/EDF + data/Behavioral
        └── output/<ts>/features.csv + cov_matrices.npz
    │
    ▼ feature_engineering/main.py primitives + behavioural → composites
-       └── output/<ts>/full_dataset.csv
+       └── output/<ts>/full_dataset.csv + apriori_theory_mapping.csv
    │
    ▼ analysis/main.py            confirmatory OLS + exploratory ML + screening index
        └── output/<ts>/<target>/<feature_set>/{summary.json,
@@ -147,9 +135,9 @@ data/EDF + data/Behavioral
 
    ┄ data_quality_check/main.py  (sidecar; runs on demand)
        reads preprocessing + validation + feature_engineering + analysis
-       └── output/<ts>/{report.md, eeg_quality_*, aufei_*,
-           flanker_*, digit_span_*, n_reconciliation,
-           sample_demographics, behavioral_correlation_*}.csv
+       └── output/<ts>/{report.md, eeg_quality_*, aufei_*, flanker_*,
+           digit_span_*, n_reconciliation, sample_demographics,
+           behavioral_correlation_*}.csv
            + behavioral_correlation_heatmap.png
 
    ┄ research_report/main.py     (sidecar; runs on demand)
@@ -157,326 +145,206 @@ data/EDF + data/Behavioral
        └── output/<ts>/research_report.md
 ```
 
-`validation` reads `preprocessing/output/` for the pass-rate summary but
-does not block downstream stages — `feature_building` only depends on
+`validation` reads `preprocessing/output/` for the pass-rate summary but does
+not block downstream stages — `feature_building` only depends on
 `preprocessing`.
 
 **Sidecars**:
-- `data_quality_check` is the internal QC document. Headline-first
-  Markdown report plus supporting CSVs. Audience: PI + reviewers. Lead
-  with construct-validity findings and target-reliability audit, not
-  rosy summaries.
-- `research_report` is the consolidated research document. Five sections:
-  (1) sample & data quality, (2) pipeline description + flow diagram,
-  (3) confirmatory a priori OLS, (4) exploratory ML grid (with explicit
-  construct-validity caveat), (5) screening index — illustrative
-  prospect output (LOO out-of-sample, Bayesian-shrunk, with prediction
-  interval; explicit non-clinical labeling).
+- `data_quality_check` — internal QC document, headline-first Markdown plus
+  supporting CSVs. Audience: PI + reviewers. Lead with construct-validity
+  findings and the target-reliability audit, not rosy summaries.
+- `research_report` — consolidated five-section research document: (1) sample
+  & data quality, (2) pipeline description + flow diagram, (3) confirmatory
+  a priori OLS, (4) exploratory ML grid with the construct-validity caveat,
+  (5) screening index — illustrative prospect output (LOO out-of-sample,
+  Bayesian-shrunk, with prediction interval; explicit non-clinical labeling).
 
 ## Methodological invariants (do not regress)
 
 Load-bearing for scientific validity. Do not "simplify" them.
 
-- **Average reference applied BEFORE ICA fit**. Source EDFs are Mitsar
-  A1-A2 implicit (no M1/M2 channels in file). We commit to avg-ref so the
-  unmixing W and `ica.apply` share a reference frame, and so ICLabel —
-  trained on avg-ref data — classifies in the frame it expects.
-  `qc.json` records `source_reference` and `output_reference` for
-  provenance. The exported EDFs carry 15 channels (Fp1/Fp2, F7/F3/Fz/F4/F8,
-  C3/Cz/C4, P3/Pz/P4, O1/O2); the 4 temporal electrodes (T3/T4/T5/T6) are
-  not in the file (`n_channels_raw = 15`). The acquisition device is
-  nominally 19-channel and the IJP manuscript uses 19-channel framing, but
-  the pipeline only ever processes the 15 exported channels. This does not
-  change the confirmatory analysis: the 9 a priori composites use only
-  Fz/Cz (FC) and O1/O2/Pz (PO), all present. Do not claim 19 channels were
-  analysed; describe composites by their region channels.
+**Preprocessing**
 
-- **ICA fit on a 1 Hz HP copy of the avg-referenced raw**; the unmixing
-  matrix is then applied to the 0.5 Hz HP avg-ref raw. ICLabel will emit
-  a runtime warning that data is not 1-100 Hz (we are 1-45 Hz because
-  of our lowpass) — this is the documented compromise, not a bug.
+- **Average reference BEFORE ICA fit.** Source EDFs are Mitsar A1-A2 implicit
+  (no M1/M2 in file). Avg-ref means the unmixing W and `ica.apply` share a
+  reference frame, and ICLabel — trained on avg-ref data — classifies in the
+  frame it expects. `qc.json` records `source_reference` / `output_reference`.
+- **15 channels, not 19.** Exported EDFs carry Fp1/Fp2, F7/F3/Fz/F4/F8,
+  C3/Cz/C4, P3/Pz/P4, O1/O2; the 4 temporal electrodes (T3/T4/T5/T6) are not
+  in the file (`n_channels_raw = 15`). The device is nominally 19-channel and
+  the IJP manuscript uses 19-channel framing, but the pipeline only ever
+  processes 15. This does not change the confirmatory analysis — the 9 union
+  composites use only Fz/Cz (FC) and O1/O2/Pz (PO). **Do not claim 19 channels
+  were analysed**; describe composites by their region channels.
+- **ICA fit on a 1 Hz HP copy** of the avg-referenced raw; the unmixing matrix
+  is then applied to the 0.5 Hz HP avg-ref raw. ICLabel warns that data is not
+  1–100 Hz (we are 1–45 Hz because of our lowpass) — documented compromise,
+  not a bug.
+- **Bad-channel interpolation AFTER ICA**, never before. Interpolated channels
+  inject smoothed data that degrades the decomposition.
+- **Fp1/Fp2 exempt from variance-based bad-channel flagging.** Pediatric blinks
+  make them naturally high-variance; flagging them pushes the blink topography
+  out of the ICA fit, hiding the very component ICLabel should classify.
+- **ICLabel + AutoReject local, no lenient retry.** Components are flagged when
+  label ∈ `iclabel_exclude_labels` AND probability > `iclabel_threshold`. Epoch
+  rejection is AutoReject local (per-channel CV thresholds, per-epoch
+  interpolation). The data-driven lenient retry was removed because it gave
+  noisy recordings looser thresholds, biasing comparisons. `min_epochs` is the
+  only gate; subject-conditions below it are dropped from disk (no `*-epo.fif`
+  saved) and downstream stages never see them.
 
-- **Bad channel interpolation runs AFTER ICA**, not before. Interpolated
-  channels inject smoothed data that degrades ICA decomposition.
-
-- **Fp1/Fp2 exempt from variance-based bad-channel flagging**. Pediatric
-  blinks make them naturally high-variance; flagging them pushes the
-  blink topography out of the ICA fit, hiding the very component
-  ICLabel is supposed to classify.
-
-- **ICLabel + AutoReject local, no lenient retry.** Artifact components
-  are flagged when label ∈ `iclabel_exclude_labels` AND probability >
-  `iclabel_threshold`. Epoch rejection uses AutoReject local (per-channel
-  CV thresholds, per-epoch interpolation). The data-driven lenient retry
-  was removed because it gave noisy recordings looser thresholds, biasing
-  comparisons. `min_epochs` is the only gate.
-
-- **`min_epochs` floor**. Subject-condition recordings whose surviving
-  epoch count falls below this floor are dropped from disk (no `*-epo.fif`
-  saved); downstream stages never see them.
+**Feature extraction**
 
 - **`np.trapezoid` for spectral integration**, not `np.sum`. Per-epoch
   coherence and PAC, not on concatenated epochs.
+- **Zero-phase filtering for PAC** (`sig.sosfiltfilt`, not `sosfilt`). Causal
+  `sosfilt` shifts phase and biases the modulation index — that was a bug in
+  the old pipeline.
+- **PAF = spectral centroid first, `find_peaks` second.** Children's alpha is
+  often broad without a sharp peak (Klimesch 1999; Grandy et al. 2013).
+  `extract_paf` defaults to the gravity frequency in 7–13 Hz; find_peaks is
+  used only when a sharp prominent peak is detected AND lies within 2 Hz of the
+  centroid. Do not flip the default without re-validating on the developmental
+  sample.
+- **Aperiodic correction is on by default when specparam is installed.**
+  `feature_building` emits `psd_periodic_<band>_<ch>`,
+  `aperiodic_exponent_<ch>`, `aperiodic_offset_<ch>` per channel per condition;
+  the union composites include `aperiodic_{exponent,offset}_{FC,PO}` as primary
+  features. specparam 2.0 API: `m.get_params("aperiodic")` (returns
+  `[offset, exponent]` in fixed mode); spectra via
+  `m.results.model.modeled_spectrum` and `m.results.model._ap_fit`. The old
+  `m.fooofed_spectrum_` / `m.aperiodic_params_` attributes are gone in 2.0.
 
-- **Zero-phase filtering for PAC** (`sig.sosfiltfilt`, not `sosfilt`). The
-  causal `sosfilt` shifts phase, biasing the modulation index. PAC of the
-  old pipeline used causal — this was a bug.
+**Analysis**
 
-- **Trial-level reliability when trial data exists**. The Flanker workbook
-  has a `Trials` sheet (1680 rows). Validation reads it and computes
-  odd-even split-half + Spearman-Brown on DDM and RT. Do NOT regress this
-  to "summary-statistics surrogates" — that was the prior methodological
-  error.
-
-- **Hierarchical OLS with age as a regressor, not pre-residualization**.
-  Restricted model `y ~ age_months`, full model `y ~ age_months + comps`.
-  By Frisch-Waugh-Lovell this is equivalent to residualizing both y AND
-  the features against age; keeps the diagnostics (covariate R², full R²,
-  block F) interpretable. Pre-residualizing y and feeding bare features
-  loses these diagnostics and risks leakage if the residualization
-  parameters are estimated on the full sample.
-
-- **Cronbach's α gate per composite** before the composite is treated as
-  a measurement of its construct. Threshold: α ≥ 0.50 minimum, ≥ 0.70
-  preferred. Composites failing the gate are still computed but should be
-  flagged in interpretation.
-
-- **`Global_EF` is a single item-level composite** (mean of all 25 AUFEI-O
-  items). `feature_engineering.load_aufei` builds it from all items minus
-  `aufei_drop_items` (default `[]`). Item screening was evaluated and
-  abandoned — dropping 7 items moved α only 0.81 → 0.80 — so all 25 items
-  are used. Report the global α / ω only (≈ 0.81 / 0.82, n = 28), never
-  per-subscale on the confirmatory path; the high α is item-count-driven,
-  not strong unidimensionality. Per-subscale scores are still emitted for
-  the QC sidecars.
-
+- **Hierarchical OLS with age as a regressor, not pre-residualization.**
+  Restricted `y ~ age_months`, full `y ~ age_months + comps`. By
+  Frisch-Waugh-Lovell this equals residualizing both y AND the features against
+  age, while keeping the diagnostics (covariate R², full R², block F)
+  interpretable. Pre-residualizing y and feeding bare features loses these and
+  risks leakage if the residualization parameters are estimated on the full
+  sample.
+- **A priori UNION (9 composites) is the primary feature set.** Region-collapsed
+  (FC = Fz+Cz; PO = O1+O2+Pz): relative band powers, aperiodic
+  exponent/offset, PAF, alpha reactivity. The legacy 3-feature Tier-1
+  (`fm_theta_eo`, `posterior_alpha_ec`, `tbr_frontal_eo_log`) remains a
+  sensitivity feature set but is no longer primary. TBR, FAA and coherence are
+  intentionally excluded from the union (TBR = collinear with rel_theta +
+  rel_beta; FAA = off-construct for cold-EF rest; coherence = fragile at short
+  avg-ref epochs). They are computed and available as correlate-table rows but
+  never enter the OLS or ML grid.
+- **Per-target directional priors** are loaded from `apriori_theory_mapping.csv`
+  emitted by `feature_engineering` — the single source of truth for which
+  composites are predicted positive or negative per target. The `directions:`
+  block in `analysis/config.yaml` covers only the legacy Tier-1.
+- **Cronbach's α gate per composite** before it is treated as a measurement of
+  its construct. α ≥ 0.50 minimum, ≥ 0.70 preferred. Failing composites are
+  still computed but must be flagged in interpretation.
 - **Multiplicity correction restricted to pre-specified hypotheses**
-  (Bonferroni or FDR-BH across composites within a feature set). Do not
-  extend correction scope to exploratory sweeps without flagging the
-  scope change explicitly.
+  (Bonferroni or FDR-BH across composites within a feature set). Do not extend
+  correction scope to exploratory sweeps without flagging the scope change.
+- **Exploratory ML grid is sensitivity, not primary.** ElasticNetCV is primary
+  (linear, regularized, l1_ratio path for collinearity). RandomForest
+  (depth=3, min_samples_leaf=3) and XGBoost (when installed, depth=3) are
+  non-linearity / model-class checks. No nested hyperparameter tuning beyond
+  ElasticNetCV's internal path (Vabalas 2019 — outer tuning at N≈26 inflates
+  the estimate). Three schemes: theory (9 union direct), data_driven (full
+  curated pool; L1 self-selects for ElasticNet, in-CV SelectKBest k=10 for
+  trees), hybrid (union + L1 on rest pool).
+- **Selection-corrected permutation wraps the full ML grid**, not the best
+  post-hoc combo: per-target max-statistic permutation across the
+  (scheme × model) sub-grid. Per-combo uncorrected p is also reported but
+  flagged as such. Do not pick the best combo and re-permute on it alone —
+  that gives an anti-conservative p.
+- **Screening index runs for ONE pre-specified combo**, not the whole grid
+  (`feedback_no_manufactured_validation` Rule 7). Pre-specified in config
+  (`screening_index.target` + `feature_set`) as the confirmatory OLS combo:
+  primary target `rt_cv`, feature set `a_priori_union`. LOO predictions +
+  Bayesian shrinkage + per-subject prediction interval + `confidence_flag` tied
+  to incremental F over age-only. NOT a diagnostic. NOT ROC against any
+  pseudo-label (no external caseness label exists in the pilot). Percentile
+  within-sample only — no tier labels.
+- **Two live OLS targets, construct-validity independence first.** Primary
+  `rt_cv` (construct-valid even when the Flanker is broken; SB = 0.97 on
+  n = 28). Secondary `Global_EF` (parent-report EF, single item-level
+  composite; biomarker-null in the pilot). `ddm_v_incongruent` and `BW_Span`
+  are retired from the target list — still computed as columns, not entered
+  into the OLS. `ddm_delta_v` and `flanker_effect` remain retracted. Rationale
+  and the full target ranking: `instruments/CLAUDE.md`.
+- **`Global_EF` is a single item-level composite** — mean of all 25 AUFEI-O
+  items, built by `feature_engineering.load_aufei` minus `aufei_drop_items`
+  (default `[]`). Item screening was evaluated and abandoned: dropping 7 items
+  moved α only 0.81 → 0.80. Report the global α / ω only, never per-subscale on
+  the confirmatory path.
 
-- **Aperiodic correction is on by default when specparam is installed**.
-  `feature_building` produces `psd_periodic_<band>_<ch>`,
-  `aperiodic_exponent_<ch>`, and `aperiodic_offset_<ch>` per channel per
-  condition. The a priori union composites include
-  `aperiodic_exponent_{FC,PO}` and `aperiodic_offset_{FC,PO}` as primary
-  features. specparam 2.0 API: pull aperiodic params via
-  `m.get_params("aperiodic")` (returns `[offset, exponent]` in fixed
-  mode); spectra via `m.results.model.modeled_spectrum` and
-  `m.results.model._ap_fit`. Old `m.fooofed_spectrum_` /
-  `m.aperiodic_params_` attributes are gone in 2.0.
+**IAPS affective track (optional)**
 
-- **IAPS emotion features are optional, dual-baseline (within primary, EO
-  sensitivity)**. The affective-viewing EDFs (`IGS_1_Happy/2_Calm/3_Sad/
-  4_Scare`; Scare = Fear) are separate per-emotion files, NOT annotations in
-  one recording; each runs marker-to-marker (emotion onset ~0 s, next-emotion
-  marker ~1 s before EOF, then `BAD_ACQ_SKIP`). There is NO annotated fixation,
-  so onset detection falls back to 0 s. When `preprocessing.params.iaps.enable`,
-  preprocessing cleans each emotion file ONCE through the resting ICA/AutoReject
-  path (ICA on the full recording) and crops TWO non-overlapping 15 s windows:
-  `response` = first 15 s after onset (transient-safe, `[5,20] s`) saved as
-  `{sid}_{emotion}-epo.fif`; `within_baseline` = last 15 s of the block (tail
-  before the next marker) saved as `{sid}_{emotion}_base-epo.fif`. Low
-  `min_epochs` floor (4). Viability for both windows → `qc.json`.
-  `feature_building` is UNTOUCHED (still `eo`/`ec` only). `feature_engineering`
-  reads those epochs and emits 16 columns: valence = ln(α_F4)−ln(α_F3) (frontal
-  alpha asymmetry), arousal = mean(β)/mean(α) over F3/Fz/F4, as response MINUS
-  baseline under two baselines — **within-file (PRIMARY)** `iaps_{Hv,Ha,Cv,Ca,
-  Sv,Sa,Fv,Fa}` and **Eyes_Open (SENSITIVITY)** `iaps_eo_{...}` (EO from the
-  existing `eo_*` columns). Both predict the SAME EF targets via feature sets
-  `iaps_va` (primary) and `iaps_va_eo` (sensitivity); `analysis.params.
-  feature_sets_to_run` is the EF-vs-IAPS toggle. `analysis` also emits
-  `iaps_baseline_consistency.{csv,json}` — Spearman |t| rank agreement + beta
-  sign agreement of the 8 features across the two baselines (the within-vs-EO
-  robustness check; lives in analysis, not validation, because validation runs
-  before the features exist). Emotion files have the same 15 channels as resting.
+IAPS emotion features are optional and dual-baseline (within primary, EO
+sensitivity). The affective-viewing EDFs (`IGS_1_Happy` / `2_Calm` / `3_Sad` /
+`4_Scare`; Scare = Fear) are separate per-emotion files, NOT annotations in one
+recording; each runs marker-to-marker (emotion onset ~0 s, next-emotion marker
+~1 s before EOF, then `BAD_ACQ_SKIP`). There is NO annotated fixation, so onset
+detection falls back to 0 s.
 
-- **PAF = spectral centroid first, find_peaks second**. Children's alpha
-  is often broad without a sharp peak (Klimesch 1999; Grandy et al. 2013).
-  `extract_paf` defaults to the gravity frequency in 7-13 Hz; find_peaks
-  is used only when a sharp prominent peak is detected AND lies within
-  2 Hz of the centroid (sanity check). Do not flip the default to
-  peak-picking without re-validating on the developmental sample.
+When `preprocessing.params.iaps.enable`, preprocessing cleans each emotion file
+ONCE through the resting ICA/AutoReject path (ICA on the full recording) and
+crops TWO non-overlapping 15 s windows: `response` = first 15 s after onset
+(transient-safe, `[5,20] s`) saved as `{sid}_{emotion}-epo.fif`;
+`within_baseline` = last 15 s of the block saved as
+`{sid}_{emotion}_base-epo.fif`. Low `min_epochs` floor (4). Viability for both
+windows goes to `qc.json`.
 
-- **A priori UNION (9 composites) is the primary feature set**. Region-
-  collapsed (FC = Fz+Cz; PO = O1+O2+Pz). Includes relative band powers,
-  aperiodic exponent/offset, PAF, and alpha reactivity. The legacy 3-
-  feature Tier-1 (`fm_theta_eo`, `posterior_alpha_ec`,
-  `tbr_frontal_eo_log`) remains available as a sensitivity feature set
-  but is no longer primary. TBR, FAA, and coherence are intentionally
-  excluded from the union (TBR = collinear with rel_theta + rel_beta;
-  FAA = off-construct for cold-EF rest; coherence = fragile at short
-  avg-ref epochs). They are computed and available as correlate-table
-  rows but never enter the OLS or ML grid.
+`feature_building` is UNTOUCHED (still `eo`/`ec` only). `feature_engineering`
+reads those epochs and emits 16 columns: valence = ln(α_F4) − ln(α_F3) (frontal
+alpha asymmetry), arousal = mean(β)/mean(α) over F3/Fz/F4, as response MINUS
+baseline under two baselines — **within-file (PRIMARY)** `iaps_{Hv,Ha,Cv,Ca,
+Sv,Sa,Fv,Fa}` and **Eyes_Open (SENSITIVITY)** `iaps_eo_{...}`. Both predict the
+SAME EF targets via feature sets `iaps_va` (primary) and `iaps_va_eo`
+(sensitivity); `analysis.params.feature_sets_to_run` is the EF-vs-IAPS toggle.
+`analysis` also emits `iaps_baseline_consistency.{csv,json}` — Spearman |t|
+rank agreement + beta sign agreement across the two baselines. It lives in
+analysis, not validation, because validation runs before the features exist.
+Emotion files have the same 15 channels as resting.
 
-- **Confirmatory OLS path uses per-target directional priors**. Loaded
-  from `apriori_theory_mapping.csv` emitted by `feature_engineering`.
-  The mapping is the single source of truth for which composites are
-  predicted to be positively or negatively related to each target. The
-  `directions:` block in `analysis/config.yaml` covers only the legacy
-  Tier-1 — the union composites are looked up by target.
+## Config knobs
 
-- **Exploratory ML grid is sensitivity, not primary**. ElasticNetCV is
-  the primary ML model (linear, regularized, l1_ratio path for
-  collinearity handling). RandomForest (depth=3, min_samples_leaf=3) and
-  XGBoost (when installed, depth=3) are reported as non-linearity / model-
-  class checks. No nested hyperparameter tuning beyond ElasticNetCV's
-  internal regularization path (Vabalas 2019 — outer tuning at N≈26
-  inflates the estimate). Three schemes: theory (direct, 9 union),
-  data_driven (full curated pool; L1 self-selects for ElasticNet,
-  in-CV SelectKBest k=10 for tree models), hybrid (union + L1 on rest
-  pool).
+Each stage's knobs live in `params:` of its own `config.yaml` — open the file;
+it is the source of truth and is commented. To add a knob, put it in the stage
+that needs it. If two stages need the same knob (e.g. `aufei_subscales`),
+**duplicate it** — do NOT introduce a globals file or shared loader.
 
-- **Selection-corrected permutation wraps the full ML grid**, not the
-  best post-hoc combo. Per-target max-statistic permutation distribution
-  across the (scheme × model) sub-grid. Per-combo uncorrected
-  permutation p is also reported but flagged as such. Do not pick best
-  combo and re-permute on it alone — that gives anti-conservative p.
+Only the non-obvious ones are listed here:
 
-- **Screening index runs for ONE pre-specified combo, not the whole grid**.
-  Per `feedback_no_manufactured_validation` Rule 7: pre-specify in config
-  (`screening_index.target` + `feature_set`); the pre-spec is the
-  confirmatory OLS combo (primary target = `rt_cv`, feature set =
-  `a_priori_union`). LOO predictions + Bayesian shrinkage + per-subject
-  prediction interval + `confidence_flag` tied to incremental F over
-  age-only. NOT a diagnostic. NOT ROC against any pseudo-label
-  (no external caseness label exists in pilot). Percentile within-sample
-  only — no tier labels.
-
-- **Two live OLS targets, construct-validity independence first**.
-  Primary = `rt_cv` (construct-valid even when the Flanker is broken;
-  SB = 0.97 on n = 28). Secondary = `Global_EF` (parent-report EF, single
-  item-level composite; biomarker-null in the pilot). `ddm_v_incongruent`
-  and `BW_Span` are retired from the target list — still computed as
-  columns, but not entered into the OLS. `ddm_delta_v` / `flanker_effect`
-  remain retracted (difference-score reliability paradox; not estimable at
-  the accuracy ceiling). See `feedback_target_ordering.md` in memory.
-
-## Knob locations
-
-```
-preprocessing/config.yaml         bandpass, notch, epoch_duration, edge_crop,
-                                  ica_method ("infomax"), ica_extended,
-                                  ica_n_components, iclabel_threshold,
-                                  iclabel_exclude_labels,
-                                  bad_channel_threshold,
-                                  bad_channel_corr_threshold,
-                                  bad_channel_flatline_std,
-                                  variance_protect_channels (["Fp1","Fp2"]),
-                                  use_autoreject_local, fallback_reject_uv,
-                                  max_reject_pct, min_epochs
-
-validation/config.yaml            aufei_subscales (item codes per subscale),
-                                  flanker_split (odd_even | random),
-                                  flanker_min_trials_per_half,
-                                  flanker_metrics,
-                                  alpha_min_acceptable, alpha_preferred
-
-feature_building/config.yaml      bands, coherence_pairs, wavelet*,
-                                  aperiodic_correction (bool),
-                                  specparam_* (freq_range, peak_width_limits,
-                                  max_n_peaks, min_peak_height),
-                                  paf_low_hz / paf_high_hz (PAF centroid
-                                  band, default 7-13 Hz)
-
-feature_engineering/config.yaml   aufei_subscales (must mirror validation),
-                                  aufei_drop_items[] (items dropped from the
-                                  single item-level Global_EF composite;
-                                  [] = keep all 25 items),
-                                  assessment_date, min_matched_n,
-                                  tbr_channels, faa_left, faa_right,
-                                  posterior_alpha_channels,
-                                  apriori_union_fc_channels (Fz, Cz),
-                                  apriori_union_po_channels (O1, O2, Pz),
-                                  apriori_*_channels (legacy Tier-1 only),
-                                  build_periodic_composites (bool),
-                                  targets_for_theory_mapping[] (per-target
-                                  directional priors emitted in
-                                  apriori_theory_mapping.csv),
-                                  feature_selection_schemes{
-                                    unsupervised_curation{
-                                      enable, variance_threshold,
-                                      collinearity_threshold},
-                                    schemes{theory, data_driven, hybrid}}
-
-analysis/config.yaml              targets[] (rt_cv primary + Global_EF
-                                  secondary; ddm_v_incongruent and BW_Span
-                                  retired from the live list),
-                                  retracted_targets[] (documented but
-                                  not run: ddm_delta_v, flanker_effect),
-                                  covariates (default age_months),
-                                  feature_sets{a_priori_union (primary),
-                                    a_priori_tier1 (legacy sensitivity),
-                                    a_priori_tier1_periodic},
-                                  directions{} (legacy only; union dirs
-                                  loaded from apriori_theory_mapping.csv),
-                                  composite_components{} (Cronbach gate),
-                                  alpha_level, correction, bootstrap_n,
-                                  alpha_min_acceptable,
-                                  exploratory_ml{enable, cv{n_splits,
-                                    n_repeats}, perm{n_perm,
-                                    perm_n_splits}, kbest_cap,
-                                    schemes_to_run[]},
-                                  screening_index{enable, target,
-                                    feature_set, label_prefix}
-
-data_quality_check/config.yaml    aufei_subscales (must mirror validation),
-                                  aufei_likert_min / aufei_likert_max
-                                  (ceiling/floor thresholds for items),
-                                  aufei_sd_fraction_of_range_floor
-                                  (variance-restriction flag),
-                                  flanker_acc_ceiling (DDM-undefined flag
-                                  threshold; default 0.95),
-                                  flanker_subchance_threshold (default 0.50
-                                  for 2AFC; identifies likely
-                                  response-mapping reversals),
-                                  flanker_effect_typical_min_ms
-                                  (construct-validity floor from
-                                  literature),
-                                  difference_score_sb_floor (auto-flag
-                                  unusable difference-score targets),
-                                  flanker_rt_floor_sec, digit_span_*_max,
-                                  write_report_md
-
-research_report/config.yaml       project_title, institution,
-                                  collaborating_site, ethics_body
-                                  (header metadata); narrative section
-                                  prose templated in main.py. No
-                                  feasibility-pitch placeholders — this
-                                  is a research document, not a donor ask.
-```
-
-To add a new knob: put it in `params:` of the stage's config that needs it.
-If two stages need the same knob (e.g. `aufei_subscales`), duplicate it —
-do NOT introduce a globals file or shared loader.
+| knob | stage | why it is not obvious |
+|---|---|---|
+| `variance_protect_channels` | preprocessing | `["Fp1","Fp2"]` — the blink-topography exemption above |
+| `min_epochs` | preprocessing | 60 for resting; the `iaps:` block overrides it to 4 (short windows) and 20 (decoder blocks) |
+| `paf_low_hz` / `paf_high_hz` | feature_building | the PAF centroid band (7–13 Hz), not a filter |
+| `aufei_drop_items` | feature_engineering | `[]` = keep all 25 items in `Global_EF`; screening was abandoned |
+| `aufei_subscales` | validation, feature_engineering, data_quality_check | duplicated in three configs by design; keep them mirrored |
+| `targets_for_theory_mapping` | feature_engineering | drives `apriori_theory_mapping.csv`, which overrides `directions:` |
+| `directions` | analysis | legacy Tier-1 only — union directions come from the mapping CSV |
+| `retracted_targets` | analysis | documented but deliberately not run |
+| `screening_index.{target,feature_set}` | analysis | the Rule-7 pre-specification; changing it post-hoc invalidates the index |
+| `feature_selection_schemes` | feature_engineering | theory / data_driven / hybrid pools for the ML grid |
+| `flanker_*` thresholds | data_quality_check | construct-validity floors from literature, not data-driven cutoffs |
 
 ## Adding a new feature
 
-Decide whether it's a **primitive** (computed from raw epochs — slow) or a
-**composite** (computed from columns already in features.csv — fast).
+Decide whether it is a **primitive** (computed from raw epochs — slow) or a
+**composite** (computed from columns already in `features.csv` — fast).
 
-- **Primitive** → `feature_building/main.py`. Add an `extract_*` function,
-  call it inside the per-subject-per-condition loop in `main()`, prefix the
-  resulting columns with the condition prefix (`eo_`/`ec_`). Re-running
-  feature_building is slow (minutes per subject).
+- **Primitive** → `feature_building/main.py`. Add an `extract_*` function, call
+  it inside the per-subject-per-condition loop in `main()`, prefix the
+  resulting columns with the condition prefix (`eo_`/`ec_`). Re-running is slow
+  (minutes per subject).
+- **Composite** → `feature_engineering/main.py:add_all_engineered`. Build from
+  existing `psd_abs_*` / `psd_periodic_*` columns. If it has multiple
+  constituent items, add the components list to
+  `analysis/config.yaml:composite_components` so the Cronbach α gate runs on
+  it. Re-running takes seconds.
 
-- **Composite** → `feature_engineering/main.py:add_all_engineered`. Build
-  from existing `psd_abs_*`/`psd_periodic_*` etc. columns. If the composite
-  has multiple constituent items, add the components list to
-  `analysis/config.yaml:composite_components` so the Cronbach α gate runs
-  on it. Re-running feature_engineering takes seconds.
-
-## Adding a new behavioural measure
-
-1. Add the column to the appropriate loader in
-   `feature_engineering/main.py` (`load_aufei` / `load_flanker` /
-   `load_digit_span`) and add it to the `keep` list.
-2. If you want to use it as a target, add it to
-   `analysis/config.yaml:targets`.
-3. If it has trial-level data, add a reliability check in
-   `validation/main.py` mirroring the Flanker pattern (split into halves,
-   compute the metric per half, Spearman-Brown corrected r across
-   subjects).
+For a new *behavioural* measure, see `instruments/CLAUDE.md`.
 
 ## Running
 
@@ -486,18 +354,17 @@ python preprocessing/main.py        # ~5-10 min for 52 files
 python validation/main.py           # <30 sec
 python feature_building/main.py     # ~5-10 min
 python feature_engineering/main.py  # <30 sec
-python analysis/main.py             # ~5-30 min when exploratory_ml.enable=true
+python analysis/main.py             # ~5-30 min with exploratory_ml.enable=true
                                     # (permutation grid is the bottleneck);
-                                    # ~30 sec when only confirmatory OLS
+                                    # ~30 sec for confirmatory OLS only
 
 # Sidecars (on demand)
 python data_quality_check/main.py   # <10 sec — internal QC audit
 python research_report/main.py      # <10 sec — research report
-                                    # (data quality + pipeline + OLS + ML + screening)
 ```
 
-Re-run only what changed. Each stage caches; downstream stages auto-pick
-the latest run of their predecessor.
+Re-run only what changed; each stage auto-picks the latest run of its
+predecessor.
 
 | What changed | Re-run from |
 |---|---|
@@ -506,7 +373,7 @@ the latest run of their predecessor.
 | `bands`, `coherence_pairs`, wavelet, aperiodic flag | `feature_building` |
 | Composite definitions, behavioural scoring, age params | `feature_engineering` |
 | Targets, feature sets, directions, correction, bootstrap N | `analysis` only |
-| Want a fresh pilot quality snapshot | `data_quality_check` (sidecar, doesn't invalidate anything else) |
+| Want a fresh pilot quality snapshot | `data_quality_check` (sidecar, invalidates nothing) |
 | Want a refreshed research report | `research_report` (sidecar; re-pulls all upstream) |
 
 Old `<stage>/output/<ts>/` accumulate; prune by hand.
@@ -514,109 +381,61 @@ Old `<stage>/output/<ts>/` accumulate; prune by hand.
 ## Conventions
 
 - Python 3, sklearn-style only where used (analysis is statsmodels OLS).
-- File paths inside stages: NEVER reference `utils.io` or sibling stages
-  by absolute import — every stage is meant to be runnable standalone.
+- File paths inside stages: NEVER reference `utils.io` or sibling stages by
+  absolute import — every stage must be runnable standalone.
 - Random seeds: read `config["random_state"]` (top-level global). Each
-  `main.py` should explicitly seed numpy before any stochastic step.
-- Optional dependencies (`specparam`/`fooof`, `factor_analyzer`) imported
-  at point of use inside `try/except ImportError`, skipped gracefully.
-- Print statements go to stdout; long-running stages should log progress
-  per subject.
-- Windows shell: forward slashes; `python` resolves to a working
-  interpreter on the user's machine.
+  `main.py` seeds numpy explicitly before any stochastic step.
+- Optional dependencies (`specparam`/`fooof`, `factor_analyzer`, matplotlib /
+  seaborn for the QC heatmap) imported at point of use inside
+  `try/except ImportError`, skipped gracefully.
+- Print statements go to stdout; long-running stages log progress per subject.
+- Windows shell: forward slashes; `python` resolves to a working interpreter on
+  the user's machine.
 
 ## Documentation
 
-- `README.md` — user-facing summary (what runs, what each stage does,
-  data layout).
-- `CLAUDE.md` — this file. Operating notes for Claude Code only.
-- `data_quality_check/output/<ts>/report.md` — generated pilot quality
-  report. Gitignored (under `output/`); regenerate with the sidecar
-  whenever a refreshed snapshot is needed. Do not promote it to a
-  committed top-level `.md`.
-- `research_report/output/<ts>/research_report.md` — generated 5-section
-  research document (data quality + pipeline description + confirmatory
-  OLS + exploratory ML + screening index demo). Gitignored. Regenerate
-  whenever upstream stages produce new evidence. Do not promote to a
-  committed top-level `.md`.
+- `README.md` — user-facing summary.
+- `CLAUDE.md` — this file (EEG pipeline). `instruments/CLAUDE.md` — behavioural
+  side. `instruments/<tool>/CLAUDE.md` — per-instrument detail.
+- `data_quality_check/output/<ts>/report.md` and
+  `research_report/output/<ts>/research_report.md` are generated and
+  gitignored. Regenerate with the sidecar when a fresh snapshot is needed; do
+  not promote either to a committed top-level `.md`.
 
 Do not create any other `.md` files at the root or in stage folders unless
 explicitly requested. Methodology notes go in docstrings + this file.
 
-## Pilot quality findings to keep in mind
+## Pilot N reconciliation
 
-These are baselines observed in the 2026-05-29 end-to-end run + the data
-quality audit at `data_quality_check/output/2026-05-29_165405/report.md`.
-Re-run `data_quality_check` for fresh numbers; the qualitative problems
-below are likely to persist until the measurement instruments are revised.
+From the 2026-08-08 QC run (preprocessing `2026-07-07_145424`, analysis
+`2026-07-28_110315`, `min_epochs = 60`). Re-run `data_quality_check` for fresh
+numbers — **these shift whenever `min_epochs` or the preprocessing params
+change**, so quote the run, not the number.
 
-- **Flanker is construct-broken in the pilot.** Mean `flanker_effect` =
-  1.5 ms vs literature 30–80 ms (pediatric); `rt_congruent` ≈
-  `rt_incongruent` at the sample level; 75% accuracy ceiling, 39% at
-  exact 1.0. The task did not induce a conflict signal — any null
-  observed in `analysis/` is downstream of this construct-validity
-  failure, not weak biomarkers. Do not interpret a Flanker-derived null
-  result as biomarker-level. The main study requires task modification
-  (harder distractors, response deadline, or task replacement).
-- **Do not propose any difference score as a primary target.** Specifically
-  not `flanker_effect` (SB = 0.13) and not `ddm_delta_v` (SB not
-  estimable: only n = 2 valid split-half pairs after EZ-DDM degeneracy
-  from the ceiling). This is structural — difference of two highly
-  correlated reliable measures has low or undefined reliability. See
-  [[feedback-difference-score-targets]].
-- **Recommended Flanker target ordering** (replacing the prior bad
-  recommendation): primary = `rt_cv` (SB = 0.97 on n = 28); secondary =
-  `ddm_v_incongruent` (SB = 0.99 but on n = 6 non-ceiling subsample —
-  caveat in any report); not `acc_*` (pseudo-reliable at ceiling but
-  uninformative); never `ddm_delta_v` or `flanker_effect`.
-- **D0000816 is a pre-registered exclusion candidate.** Subject scored
-  `acc_incongruent = 0.07` (below 2AFC chance 0.5). Most likely
-  response-mapping reversed. Drives the min of v_incongruent (−2.13) and
-  delta_v (−3.96) distributions. Recommend adding
-  `acc_incongruent < flanker_subchance_threshold` (default 0.50) as an
-  explicit exclusion rule in the main study analysis plan.
-- **Two DDM estimators in play — do not conflate them.** The analysis
-  target column (`ddm_v_incongruent`, `ddm_delta_v`, etc.) is read
-  **as-is** from the workbook's `Features` sheet; the estimator is
-  unknown to this pipeline but visibly handles `acc = 1.0` (not EZ-DDM).
-  The reliability estimates reported by `validation/` and
-  `data_quality_check/` use **EZ-DDM** on split halves of the trial-level
-  data, which collapses to n = 4–11 because EZ is undefined at
-  `acc ∈ {0, 1}`. The reliability of the workbook's DDM column at the
-  full sample size is therefore *unknown*. Do not claim the workbook
-  uses "a more robust estimator" without independent evidence; the prior
-  framing-note that did so was inherited from pre-rewrite code and is
-  reframed as: *unknown estimator that handles ceiling cases
-  differently from EZ*.
-- **AUFEI ceiling/floor.** IC3 has zero variance (every pilot subject
-  scored 4); CF2 is at 89% ceiling. IC3 is already excluded from the IC
-  subscale composition; CF2 is a new flag — recommend exclusion or
-  rewrite in the next pilot wave.
-- **AUFEI low reliability is partly variance restriction, not only item
-  content.** WM subscale SD = 0.26 on a 1–4 Likert scale (~9% of range)
-  — this is parent-report social-desirability compression to the top
-  end. The fix is *re-anchor the response scale* (e.g. 1–7 with concrete
-  behavioural anchors, or frequency-based items), not just item rewrite.
-  A CFA on these data without addressing variance restriction will
-  produce a degenerate solution. AUFEI subscales should be treated as
-  construct-invalid until the instrument revision; the confirmatory path
-  therefore reports only the single global EF composite (all 25 items,
-  α ≈ 0.81), never the subscales.
-- **Digit Span has no item-level data in the current export.** FW vs BW
-  is the only available reliability proxy (SB = 0.46) and the
-  parallel-halves assumption is invalid (FW = passive retention,
-  BW = active manipulation). Report as approximate, not definitive. For
-  the main study, request item-level output from the testing platform
-  and mirror the Flanker trial-level pattern in `validation/main.py`.
-- **Age is a strong confound for the DDM drift target.** Restricted-model
-  R² (`ddm_v_incongruent ~ age_months`) was 0.31 in the pilot. The
-  hierarchical OLS handles this natively via Frisch-Waugh — keep it; do
-  not switch to a CV regression path that drops `age_months` from the
-  design matrix.
-- **N reconciliation.** 28 behavioural → 51/52 EEG recordings OK
-  (D0000798/Eyes_Closed dropped at 53/105 epochs below `min_epochs`) →
-  25 subjects with both EO and EC → 26 merged behavioural ∩ EEG
-  (D0000796 and D0000823 have behavioural but no usable EDF — both withdrew
-  during data collection) → 25 in the OLS (1 dropped for `age_months` NaN).
-  The IJP manuscript frames this as 28 enrolled, 2 withdrew, 26 analysed.
-  State these explicitly in any report that quotes N.
+| layer | n | loss vs. above |
+|---|---|---|
+| behavioural (AUFEI / Flanker / Digit Span) | 28 | — |
+| EEG recordings attempted | 52 | — |
+| EEG recordings OK | 47 | 5 below `min_epochs`: D0000798/EC 55, D0000813/EC 51, D0000820/EO 43, D0000822/EO 51, D0000822/EC 58 |
+| subjects with both EO and EC | 22 | lost the subjects retaining only one condition |
+| merged behavioural ∩ EEG | 25 | 3 behavioural-only: D0000796, D0000822, D0000823 |
+| analysis full OLS | 22 | 3 dropped for NaN (target `rt_cv`): D0000798, D0000813, D0000820 — mostly `alpha_reactivity_PO`, which needs both conditions |
+
+D0000796 and D0000823 withdrew during data collection and have no EDF at all.
+D0000822 is different — it was recorded but both conditions fell below
+`min_epochs`, so it is a cleaning-floor loss, not a withdrawal. Do not merge
+the two categories when reporting attrition.
+
+**The IJP manuscript frames the sample as 28 enrolled, 2 withdrew, 26
+analysed.** That predates the current `min_epochs = 60` floor and no longer
+matches any live run — reconcile it against a named run before submission
+rather than quoting it as-is.
+
+Age is a strong confound for DDM drift targets: restricted-model R²
+(`ddm_v_incongruent ~ age_months`) was 0.31 in the pilot. The hierarchical OLS
+handles this natively via Frisch-Waugh — do not switch to a CV regression path
+that drops `age_months` from the design matrix.
+
+Behavioural / instrument quality findings — the Flanker construct failure,
+difference-score targets, AUFEI ceiling and variance restriction, Digit Span
+item-level gap — are in `instruments/CLAUDE.md`.
